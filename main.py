@@ -57,9 +57,11 @@ GOOGLE_NEWS = [
     # --- Indonesia (Indonesian) ---
     ("regulasi kripto OR pajak kripto Indonesia when:6h", "id", "ID"),
     ("aturan kecerdasan buatan Indonesia when:6h", "id", "ID"),
-    # --- China (Chinese) ---
-    ("加密货币 政策 监管 when:6h", "zh-CN", "CN"),
-    ("人工智能 监管 法规 when:6h", "zh-CN", "CN"),
+    ("Indodax OR Tokocrypto OR Pintu when:6h", "id", "ID"),
+    ("Bappebti OR OJK kripto when:6h", "id", "ID"),
+    # --- China (Chinese) --- PAUSED for now, uncomment when ready ---
+    # ("加密货币 政策 监管 when:6h", "zh-CN", "CN"),
+    # ("人工智能 监管 法规 when:6h", "zh-CN", "CN"),
 ]
 
 TEST_MODE = os.environ.get("TEST_MODE") == "1"
@@ -189,25 +191,34 @@ def analyze(items):
         for i, it in enumerate(items)
     )
 
-    prompt = f"""You are a news radar for a crypto + AI media brand that posts to THREE audiences:
-- Indonesia (Indonesian language) -> market code "ID"
-- China (Chinese social media) -> market code "CN"
-- International English audience -> market code "US" or "Global"
+    prompt = f"""You are a news radar for a crypto + AI media brand posting to a young
+Indonesian audience (market code "ID") and an international English audience
+(market code "US"/"Global"). China is paused for now — never tag "CN".
 
-For EACH headline below, decide whether it is genuinely worth posting about. Include ONLY headlines that are:
-- fast-rising / breaking / high-interest AI or crypto news, OR
-- a government/regulatory/legal action affecting AI or crypto (especially Indonesia, US, or China) — e.g. new crypto tax, exchange bans, AI laws, export blocks.
+For EACH headline, apply this STAKES TEST, not just topic relevance:
+Would a young crypto/AI-interested person feel real FOMO, worry, or curiosity —
+not just "huh, technically related"? Ask: does this change what someone can/can't
+do tomorrow, affect their money, their platform access, or expose a scam?
 
-EXCLUDE: price predictions, generic opinion pieces, low-effort clickbait, and duplicates (if several headlines cover the SAME event, keep only the single best one).
+Include ONLY headlines that pass the stakes test AND are one of:
+- fast-rising / breaking / high-interest AI or crypto news
+- a government/regulatory/legal action affecting AI or crypto (especially
+  Indonesia or the US) — new tax, exchange bans, AI laws, export blocks
+- a scam, rug-pull, hack, or exploit exposure (protects and builds trust with audience)
+
+EXCLUDE: price predictions, generic opinion pieces, low-effort clickbait,
+dry technical/legal stories with no real stakes for a normal person, and
+duplicates (if several headlines cover the SAME event, keep only the best one).
 
 Return ONLY a JSON array (no other text, no markdown). Each object:
 {{
   "n": <headline number>,
   "topic": "crypto" | "ai" | "both",
-  "category": "breaking" | "regulation" | "general",
-  "markets": [<one or more of "ID","US","CN","Global">],
+  "category": "breaking" | "regulation" | "scam_alert" | "general",
+  "markets": [<one or more of "ID","US","Global">],
+  "virality_potential": "low" | "medium" | "high",
   "summary": "<1-2 sentence plain-English summary>",
-  "why": "<one sentence: why this audience should care>",
+  "why": "<one sentence: why THIS audience feels FOMO/worry/curiosity>",
   "angle": "<a short suggested content hook/angle for a post>"
 }}
 
@@ -233,16 +244,22 @@ Headlines:
         return []
 
 
+VIRALITY_DOT = {"high": "🟢🟢🟢", "medium": "🟢🟢⚪", "low": "🟢⚪⚪"}
+
+
 def format_message(item, a):
     cat = str(a.get("category", "")).lower()
-    badge = "⚖️" if cat == "regulation" else "🔥" if cat == "breaking" else "📰"
+    badge = ("⚖️" if cat == "regulation" else
+             "🔥" if cat == "breaking" else
+             "🚨" if cat == "scam_alert" else "📰")
     topic = str(a.get("topic", "")).lower()
     topic_emoji = "🪙🤖" if topic == "both" else "🤖" if topic == "ai" else "🪙"
     flags = " ".join(FLAGS.get(m, m) for m in a.get("markets", [])) or "🌐"
+    virality = VIRALITY_DOT.get(str(a.get("virality_potential", "")).lower(), "")
     esc = html.escape
     return (
         f"{badge} {topic_emoji} <b>{esc(item['title'])}</b>\n\n"
-        f"🌍 <b>Post to:</b> {flags}\n"
+        f"🌍 <b>Post to:</b> {flags}   {virality}\n"
         f"📝 {esc(a.get('summary', ''))}\n\n"
         f"💡 <b>Why they care:</b> {esc(a.get('why', ''))}\n"
         f"🎬 <b>Angle:</b> {esc(a.get('angle', ''))}\n\n"
