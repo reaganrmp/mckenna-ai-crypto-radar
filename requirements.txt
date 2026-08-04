@@ -1,0 +1,4 @@
+requests
+feedparser
+anthropic
+python-dotenv
