@@ -316,6 +316,27 @@ VISUAL SAFETY RULE (important):
   no specific real face needed), set "visual_type" to "ai_generated" and give a
   detailed "ai_image_prompt" for an AI art tool - abstract/conceptual imagery only,
   NO real people, NO text baked into the image (text gets added later in Canva).
+  Write this prompt like a professional AI-art prompter, not a one-line description.
+  CRITICAL: the prompt must be visually TIED to the specific facts of THIS story
+  (the scale, the numbers, the specific industry/location/situation) - never a
+  generic stock scene that could illustrate any random headline. If the story has
+  a number (e.g. "360MW", "$50M hack", "3 data centers"), find a visual way to
+  hint at that scale or fact, not just the general topic.
+  It MUST include, in order:
+  1. Subject + action grounded in the actual story's specifics (concrete, specific
+     object/scene tied to this exact news - e.g. for a "$50M exchange hack" story:
+     "a shattered digital vault door with glowing binary code leaking out like
+     liquid light", not just "a generic hacker scene")
+  2. Composition (e.g. "centered subject, shot from a low angle, dramatic negative
+     space in the lower third of the frame for text overlay")
+  3. Lighting + mood (e.g. "single hard rim light from top-right, deep shadows,
+     cinematic, moody, high contrast")
+  4. Color grading matching the brand: dark near-black background with teal
+     (#367588) accent lighting/glow somewhere in the scene
+  5. Style + quality tags (e.g. "photorealistic, 8k, shot on 50mm lens, shallow
+     depth of field, ultra-detailed, editorial photography style, no text, no logos,
+     no watermark")
+  Aim for 3-5 full sentences of specific visual detail, not a short phrase.
 
 Return ONLY JSON (no markdown, no extra text):
 {{
