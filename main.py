@@ -72,6 +72,8 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 CRYPTOPANIC_TOKEN = os.environ.get("CRYPTOPANIC_TOKEN")  # optional
 JAYDEN_BOT_TOKEN = os.environ.get("JAYDEN_BOT_TOKEN")     # optional - enables content packs
+TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")      # optional - enables Colton image generation
+TOGETHER_IMAGE_MODEL = "black-forest-labs/FLUX.1-schnell-Free"  # swap to FLUX.1-schnell if you go paid
 JAYDEN_MODEL = "claude-sonnet-5"   # better copywriting than Haiku, worth it for the few high alerts
 
 FLAGS = {"ID": "🇮🇩", "US": "🇺🇸", "CN": "🇨🇳", "Global": "🌐"}
@@ -305,38 +307,26 @@ Rules:
   worth proving, leave "slides" as an empty list - most posts should have ZERO extra slides.
 - No walls of text anywhere. If it can't be said in one short line, cut it.
 
-VISUAL SAFETY RULE (important):
+CAPTION RULE (important - this is what the audience actually reads):
+The caption must make ANY reader fully understand the story, even if they know
+nothing about crypto or AI. In 3-5 short sentences, plainly cover:
+  1. WHAT happened (the concrete event, with the key number/name)
+  2. WHY it happened / the context behind it
+  3. WHAT it means for the reader - who gains, who loses, what changes
+Write in simple everyday language, no jargon. If you must use a technical term,
+explain it in the same breath. End with a short question or line that invites replies.
+The hook is the dramatic version of the headline; the caption is the clear, honest
+explanation behind it. Never leave the reader confused about what actually happened.
+
+VISUAL RULE:
 - If the news centers on a real, named, identifiable person (a CEO, official,
-  politician, etc.), set "visual_type" to "real_photo" and describe what kind of
-  describe a REAL, dramatic news photo to search for (dark/desaturated background,
-  subject well-lit, similar to Indonesian crypto media style) in "visual_direction". Do NOT write
-  an ai_image_prompt in this case - leave it empty. Realistic AI images of real
-  people are risky (deepfakes/misinformation) and not worth the risk for this brand.
-- If the news is conceptual/abstract (market moves, charts, general crypto/AI themes,
-  no specific real face needed), set "visual_type" to "ai_generated" and give a
-  detailed "ai_image_prompt" for an AI art tool - abstract/conceptual imagery only,
-  NO real people, NO text baked into the image (text gets added later in Canva).
-  Write this prompt like a professional AI-art prompter, not a one-line description.
-  CRITICAL: the prompt must be visually TIED to the specific facts of THIS story
-  (the scale, the numbers, the specific industry/location/situation) - never a
-  generic stock scene that could illustrate any random headline. If the story has
-  a number (e.g. "360MW", "$50M hack", "3 data centers"), find a visual way to
-  hint at that scale or fact, not just the general topic.
-  It MUST include, in order:
-  1. Subject + action grounded in the actual story's specifics (concrete, specific
-     object/scene tied to this exact news - e.g. for a "$50M exchange hack" story:
-     "a shattered digital vault door with glowing binary code leaking out like
-     liquid light", not just "a generic hacker scene")
-  2. Composition (e.g. "centered subject, shot from a low angle, dramatic negative
-     space in the lower third of the frame for text overlay")
-  3. Lighting + mood (e.g. "single hard rim light from top-right, deep shadows,
-     cinematic, moody, high contrast")
-  4. Color grading matching the brand: dark near-black background with teal
-     (#367588) accent lighting/glow somewhere in the scene
-  5. Style + quality tags (e.g. "photorealistic, 8k, shot on 50mm lens, shallow
-     depth of field, ultra-detailed, editorial photography style, no text, no logos,
-     no watermark")
-  Aim for 3-5 full sentences of specific visual detail, not a short phrase.
+  politician), set "visual_type" to "real_photo" and in "visual_direction" describe
+  the REAL news photo to search for (dark/desaturated background, subject well-lit,
+  dramatic). We never fabricate images of real people.
+- Otherwise set "visual_type" to "ai_generated" and in "visual_direction" describe,
+  in ONE clear sentence, the concrete symbolic scene that best illustrates THIS
+  specific story - grounded in its actual facts (the number, the scale, the place),
+  never a generic stock scene. No real people. No text in the image.
 
 Return ONLY JSON (no markdown, no extra text):
 {{
@@ -345,10 +335,9 @@ Return ONLY JSON (no markdown, no extra text):
  "slides": ["at most 1 short 'proof/receipt' line, or leave this list empty"],
  "highlight": "the exact phrase from the chosen headline to put in accent color",
  "thumbnail_text": "the bold words to put ON the cover image",
- "caption": "short post caption",
+ "caption": "3-5 sentence plain-language explanation per the CAPTION RULE above",
  "visual_type": "real_photo" | "ai_generated",
- "visual_direction": "what photo/image to use and why",
- "ai_image_prompt": "prompt for AI art tool, or empty string if visual_type is real_photo",
+ "visual_direction": "one clear sentence describing the image concept",
  "formats": {{"tiktok": "one-line tip", "instagram": "...", "threads": "...", "x": "..."}},
  "hashtags": {{"tiktok": ["5-7 tags"], "instagram": ["..."], "threads": ["..."], "x": ["..."]}}
 }}
@@ -367,6 +356,71 @@ News:
     return json.loads(text)
 
 
+# ============================ COLTON - IMAGE GENERATOR ============================
+# Takes Jayden's visual_direction and produces an on-brand image, then sends it
+# to Telegram. Uses FLUX Schnell (very cheap / free tier available on Together AI).
+
+# Your brand look, applied to EVERY image so the feed stays consistent.
+BRAND_STYLE = (
+    "cinematic editorial tech-news key art, near-black background, "
+    "deep teal (#367588) rim lighting and atmospheric glow as the dominant accent, "
+    "subtle warm amber highlight as secondary accent, high contrast, deep shadows, "
+    "dramatic single-source lighting, glossy premium finish, "
+    "strong empty negative space in the lower third for headline text, "
+    "photorealistic, ultra-detailed, 8k, shallow depth of field, "
+    "no text, no letters, no words, no watermark, no logos, no human faces"
+)
+
+
+def generate_image(visual_direction, news_title):
+    """Build a full branded prompt and generate the image. Returns an image URL."""
+    if not TOGETHER_API_KEY:
+        return None
+
+    subject = visual_direction or news_title
+    prompt = f"{subject}. {BRAND_STYLE}"
+
+    try:
+        r = requests.post(
+            "https://api.together.xyz/v1/images/generations",
+            headers={"Authorization": f"Bearer {TOGETHER_API_KEY}",
+                     "Content-Type": "application/json"},
+            json={
+                "model": TOGETHER_IMAGE_MODEL,
+                "prompt": prompt[:1000],
+                "width": 1024,
+                "height": 1280,        # portrait, matches IG/TikTok
+                "steps": 4,
+                "n": 1,
+            },
+            timeout=90,
+        )
+        if r.status_code != 200:
+            log(f"Together error {r.status_code}: {r.text[:200]}")
+            return None
+        data = r.json().get("data", [])
+        return data[0].get("url") if data else None
+    except Exception as e:
+        log(f"Image generation failed: {e}")
+        return None
+
+
+def send_telegram_photo(image_url, caption, token):
+    """Send a generated image into Telegram with a short caption."""
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    try:
+        r = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "photo": image_url,
+                                     "caption": caption[:1000], "parse_mode": "HTML"},
+                          timeout=60)
+        if r.status_code != 200:
+            log(f"Telegram photo error {r.status_code}: {r.text[:200]}")
+        return r.status_code == 200
+    except Exception as e:
+        log(f"Telegram photo send failed: {e}")
+        return False
+# ================================================================================
+
+
 def format_pack(p, news_title=""):
     esc = html.escape
     hooks = "\n".join(f"  {i + 1}. {esc(h)}" for i, h in enumerate(p.get("hooks", [])))
@@ -379,13 +433,8 @@ def format_pack(p, news_title=""):
         f"  <b>{k.title()}:</b> {esc(' '.join(tags[k]))}" for k in order if tags.get(k))
 
     vtype = p.get("visual_type", "")
-    if vtype == "real_photo":
-        visual_block = f"📷 <b>Use a REAL photo:</b> {esc(p.get('visual_direction', ''))}"
-    else:
-        visual_block = (
-            f"🎨 <b>AI image prompt:</b> {esc(p.get('visual_direction', ''))}\n"
-            f"<code>{esc(p.get('ai_image_prompt', ''))}</code>"
-        )
+    label = "📷 <b>Use a REAL photo:</b>" if vtype == "real_photo" else "🎨 <b>Visual:</b>"
+    visual_block = f"{label} {esc(p.get('visual_direction', ''))}"
 
     return (
         f"✍️ <b>JAYDEN CONTENT PACK</b>\n"
@@ -420,6 +469,10 @@ def main():
     results = analyze(items)
     log(f"Claude flagged {len(results)} post-worthy item(s).")
 
+    # Only send/act on HIGH virality alerts - keeps Telegram clean and cost low
+    results = [a for a in results if str(a.get("virality_potential", "")).lower() == "high"]
+    log(f"{len(results)} are HIGH priority - only these get sent.")
+
     sent = 0
     for a in results:
         n = a.get("n")
@@ -437,6 +490,20 @@ def main():
                 pack = generate_pack(item, a)
                 send_telegram(format_pack(pack, item['title']), token=JAYDEN_BOT_TOKEN)
                 time.sleep(1)
+
+                # Colton: generate the on-brand image for this pack
+                if TOGETHER_API_KEY:
+                    log("Colton: generating image...")
+                    img = generate_image(pack.get("visual_direction", ""), item["title"])
+                    if img:
+                        note = ("🖼️ <b>Colton</b> — drop this into your Canva template.\n"
+                                f"Headline: <b>{html.escape(pack.get('thumbnail_text',''))}</b>")
+                        if pack.get("visual_type") == "real_photo":
+                            note += "\n<i>Note: story features a real person — use this as a background/element, and source a real photo of them.</i>"
+                        send_telegram_photo(img, note, JAYDEN_BOT_TOKEN)
+                        time.sleep(1)
+                    else:
+                        log("Colton: no image produced this run.")
             except Exception as ex:
                 log(f"Jayden pack generation failed: {ex}")
     log(f"Sent {sent} alert(s). Done.")
