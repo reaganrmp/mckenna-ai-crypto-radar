@@ -405,6 +405,79 @@ def generate_image(visual_direction, news_title):
         return None
 
 
+def compose_final_post(bg_bytes, headline, highlight_phrase, source_name=""):
+    """Takes Colton's raw background + Jayden's text, returns a finished,
+    ready-to-post 1080x1350 image (bytes) with logo, gradient, and headline
+    baked in. This is the whole point - no manual Canva step needed."""
+    from PIL import Image, ImageDraw, ImageFont
+    import io, textwrap
+
+    W, H = 1080, 1350
+    TEAL = (54, 117, 136)          # brand accent #367588
+    FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+
+    bg = Image.open(io.BytesIO(bg_bytes)).convert("RGB")
+    # cover-crop to exactly W x H
+    src_ratio, tgt_ratio = bg.width / bg.height, W / H
+    if src_ratio > tgt_ratio:
+        new_w = int(bg.height * tgt_ratio)
+        bg = bg.crop(((bg.width - new_w) // 2, 0, (bg.width + new_w) // 2, bg.height))
+    else:
+        new_h = int(bg.width / tgt_ratio)
+        bg = bg.crop((0, (bg.height - new_h) // 2, bg.width, (bg.height + new_h) // 2))
+    bg = bg.resize((W, H))
+
+    # dark gradient over the bottom ~55% so text stays readable
+    grad = Image.new("L", (1, H), 0)
+    for y in range(H):
+        if y > H * 0.40:
+            t = (y - H * 0.40) / (H * 0.60)
+            grad.putpixel((0, y), int(240 * t))
+    grad = grad.resize((W, H))
+    black = Image.new("RGB", (W, H), (5, 5, 5))
+    bg = Image.composite(black, bg, grad)
+
+    draw = ImageDraw.Draw(bg)
+    logo_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Bold.ttf", 38)
+    head_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Bold.ttf", 62)
+    src_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Regular.ttf", 24)
+
+    # logo, top-left (falls back to text wordmark if the logo file is missing)
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
+    if os.path.exists(logo_path):
+        logo = Image.open(logo_path).convert("RGBA")
+        target_h = 110
+        scale = target_h / logo.height
+        logo = logo.resize((int(logo.width * scale), target_h))
+        bg.paste(logo, (50, 45), logo)
+    else:
+        draw.text((50, 50), "CRYPTOSPARK", font=logo_font, fill=(255, 255, 255))
+        draw.rectangle([50, 95, 58, 103], fill=TEAL)
+
+    # headline, wrapped, highlight phrase colored teal
+    wrapped = textwrap.wrap(headline, width=19)
+    y_text = H - 220 - (len(wrapped) * 70)
+    for line in wrapped:
+        x = 50
+        if highlight_phrase and highlight_phrase in line:
+            pre, _, post = line.partition(highlight_phrase)
+            draw.text((x, y_text), pre, font=head_font, fill=(255, 255, 255))
+            pre_w = draw.textlength(pre, font=head_font)
+            draw.text((x + pre_w, y_text), highlight_phrase, font=head_font, fill=TEAL)
+            hi_w = draw.textlength(highlight_phrase, font=head_font)
+            draw.text((x + pre_w + hi_w, y_text), post, font=head_font, fill=(255, 255, 255))
+        else:
+            draw.text((x, y_text), line, font=head_font, fill=(255, 255, 255))
+        y_text += 70
+
+    if source_name:
+        draw.text((50, H - 55), f"Sumber: {source_name}", font=src_font, fill=(160, 160, 160))
+
+    out = io.BytesIO()
+    bg.save(out, format="PNG")
+    return out.getvalue()
+
+
 def send_telegram_photo(image_url, caption, token):
     """Send a generated image into Telegram with a short caption."""
     url = f"https://api.telegram.org/bot{token}/sendPhoto"
@@ -417,6 +490,24 @@ def send_telegram_photo(image_url, caption, token):
         return r.status_code == 200
     except Exception as e:
         log(f"Telegram photo send failed: {e}")
+        return False
+
+
+def send_telegram_photo_bytes(image_bytes, caption, token):
+    """Send a locally-composited image (raw bytes) as the finished post."""
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    try:
+        r = requests.post(
+            url,
+            data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption[:1000], "parse_mode": "HTML"},
+            files={"photo": ("post.png", image_bytes, "image/png")},
+            timeout=60,
+        )
+        if r.status_code != 200:
+            log(f"Telegram photo(bytes) error {r.status_code}: {r.text[:200]}")
+        return r.status_code == 200
+    except Exception as e:
+        log(f"Telegram photo(bytes) send failed: {e}")
         return False
 # ================================================================================
 
@@ -491,17 +582,31 @@ def main():
                 send_telegram(format_pack(pack, item['title']), token=JAYDEN_BOT_TOKEN)
                 time.sleep(1)
 
-                # Colton: generate the on-brand image for this pack
+                # Colton: generate background, then composite the FINISHED ready-to-post image
                 if TOGETHER_API_KEY:
-                    log("Colton: generating image...")
-                    img = generate_image(pack.get("visual_direction", ""), item["title"])
-                    if img:
-                        note = ("🖼️ <b>Colton</b> — drop this into your Canva template.\n"
-                                f"Headline: <b>{html.escape(pack.get('thumbnail_text',''))}</b>")
-                        if pack.get("visual_type") == "real_photo":
-                            note += "\n<i>Note: story features a real person — use this as a background/element, and source a real photo of them.</i>"
-                        send_telegram_photo(img, note, JAYDEN_BOT_TOKEN)
-                        time.sleep(1)
+                    log("Colton: generating background...")
+                    img_url = generate_image(pack.get("visual_direction", ""), item["title"])
+                    if img_url and pack.get("visual_type") != "real_photo":
+                        try:
+                            bg_bytes = requests.get(img_url, timeout=30).content
+                            hooks = pack.get("hooks", [])
+                            headline = hooks[0] if hooks else pack.get("thumbnail_text", "")
+                            final_png = compose_final_post(
+                                bg_bytes,
+                                headline=headline,
+                                highlight_phrase=pack.get("highlight", ""),
+                                source_name=item.get("source", ""),
+                            )
+                            cap = f"✅ Ready to post.\n📝 {html.escape(pack.get('caption','')[:600])}"
+                            send_telegram_photo_bytes(final_png, cap, JAYDEN_BOT_TOKEN)
+                            time.sleep(1)
+                        except Exception as ce:
+                            log(f"Colton: compositing failed, sending raw background instead: {ce}")
+                            send_telegram_photo(img_url, "🖼️ Background (compositing failed)", JAYDEN_BOT_TOKEN)
+                    elif img_url and pack.get("visual_type") == "real_photo":
+                        note = ("🖼️ <b>Colton background</b> (this story has a real person - "
+                                "add their real photo yourself, this is a supporting element)")
+                        send_telegram_photo(img_url, note, JAYDEN_BOT_TOKEN)
                     else:
                         log("Colton: no image produced this run.")
             except Exception as ex:
