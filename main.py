@@ -30,7 +30,7 @@ except Exception:
     pass
 
 # ------------------------- CONFIG (safe to tweak later) -------------------------
-LOOKBACK_MINUTES = 1440# treat news from the last N minutes as "new"
+LOOKBACK_MINUTES = 20# treat news from the last N minutes as "new"
 MAX_ITEMS_PER_RUN = 20        # safety cap so a news burst can't spike your bill
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
