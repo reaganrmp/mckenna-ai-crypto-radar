@@ -30,7 +30,7 @@ except Exception:
     pass
 
 # ------------------------- CONFIG (safe to tweak later) -------------------------
-LOOKBACK_MINUTES = 20# treat news from the last N minutes as "new"
+LOOKBACK_MINUTES = 20         # treat news from the last N minutes as "new"
 MAX_ITEMS_PER_RUN = 20        # safety cap so a news burst can't spike your bill
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"
 
@@ -292,17 +292,24 @@ def generate_pack(item, a):
     news_text = f"{item['title']}\n\nSummary: {a.get('summary', '')}"
 
     prompt = f"""You are Jayden, a social content planner for a crypto + AI media brand
-(TikTok, Instagram, Threads, X). Turn this news into a ready-to-post SWIPE POST pack.
+(TikTok, Instagram, Threads, X). Turn this news into a ready-to-post pack in the style
+of top Indonesian crypto media (dark dramatic real photo + bold headline + one highlighted
+phrase, minimal text, no over-explaining).
 Write in {lang}.
 
 Rules:
-- Slide 1 is a VISUAL HOOK (scroll-stopper). Later slides are short, simple, few lines each.
-- Punchy, confident, not corporate.
+- ONE slide 1 headline, punchy, confident, not corporate. Mark the single most
+  important phrase within it as the "highlight" (the part that goes in accent color).
+- Only include a second slide if there's a genuine "receipt" to show - a stat, a quote,
+  a price number, something that proves the claim. NOT an explanation. If there's nothing
+  worth proving, leave "slides" as an empty list - most posts should have ZERO extra slides.
+- No walls of text anywhere. If it can't be said in one short line, cut it.
 
 VISUAL SAFETY RULE (important):
 - If the news centers on a real, named, identifiable person (a CEO, official,
   politician, etc.), set "visual_type" to "real_photo" and describe what kind of
-  REAL photo to search for (news/stock site) in "visual_direction". Do NOT write
+  describe a REAL, dramatic news photo to search for (dark/desaturated background,
+  subject well-lit, similar to Indonesian crypto media style) in "visual_direction". Do NOT write
   an ai_image_prompt in this case - leave it empty. Realistic AI images of real
   people are risky (deepfakes/misinformation) and not worth the risk for this brand.
 - If the news is conceptual/abstract (market moves, charts, general crypto/AI themes,
@@ -312,10 +319,10 @@ VISUAL SAFETY RULE (important):
 
 Return ONLY JSON (no markdown, no extra text):
 {{
- "hooks": ["3 punchy slide-1 hook options"],
- "why_hook": "one short line: why these hooks stop the scroll",
- "slides": ["slide 2 text", "slide 3 text"],
- "highlight": "the single punchline for the accent color",
+ "hooks": ["3 punchy slide-1 headline options"],
+ "why_hook": "one short line: why these headlines stop the scroll",
+ "slides": ["at most 1 short 'proof/receipt' line, or leave this list empty"],
+ "highlight": "the exact phrase from the chosen headline to put in accent color",
  "thumbnail_text": "the bold words to put ON the cover image",
  "caption": "short post caption",
  "visual_type": "real_photo" | "ai_generated",
