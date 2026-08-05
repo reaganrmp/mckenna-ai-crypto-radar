@@ -71,6 +71,8 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 CRYPTOPANIC_TOKEN = os.environ.get("CRYPTOPANIC_TOKEN")  # optional
+JAYDEN_BOT_TOKEN = os.environ.get("JAYDEN_BOT_TOKEN")     # optional - enables content packs
+JAYDEN_MODEL = "claude-sonnet-5"   # better copywriting than Haiku, worth it for the few high alerts
 
 FLAGS = {"ID": "🇮🇩", "US": "🇺🇸", "CN": "🇨🇳", "Global": "🌐"}
 
@@ -185,7 +187,6 @@ def gather_candidates():
 def analyze(items):
     from anthropic import Anthropic
     client = Anthropic(api_key=ANTHROPIC_API_KEY)
-
     headlines = "\n".join(
         f'{i + 1}. "{it["title"]}" (source: {it["source"]})'
         for i, it in enumerate(items)
@@ -267,8 +268,9 @@ def format_message(item, a):
     )
 
 
-def send_telegram(text):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+def send_telegram(text, token=None):
+    token = token or TELEGRAM_BOT_TOKEN
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
     payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text,
                "parse_mode": "HTML", "disable_web_page_preview": False}
     try:
@@ -279,6 +281,96 @@ def send_telegram(text):
     except Exception as e:
         log(f"Telegram send failed: {e}")
         return False
+
+
+def generate_pack(item, a):
+    """Jayden: turns a high-priority alert into a ready-to-post content pack."""
+    from anthropic import Anthropic
+    client = Anthropic(api_key=ANTHROPIC_API_KEY)
+
+    lang = "Indonesian" if "ID" in a.get("markets", []) else "English"
+    news_text = f"{item['title']}\n\nSummary: {a.get('summary', '')}"
+
+    prompt = f"""You are Jayden, a social content planner for a crypto + AI media brand
+(TikTok, Instagram, Threads, X). Turn this news into a ready-to-post SWIPE POST pack.
+Write in {lang}.
+
+Rules:
+- Slide 1 is a VISUAL HOOK (scroll-stopper). Later slides are short, simple, few lines each.
+- Punchy, confident, not corporate.
+
+VISUAL SAFETY RULE (important):
+- If the news centers on a real, named, identifiable person (a CEO, official,
+  politician, etc.), set "visual_type" to "real_photo" and describe what kind of
+  REAL photo to search for (news/stock site) in "visual_direction". Do NOT write
+  an ai_image_prompt in this case - leave it empty. Realistic AI images of real
+  people are risky (deepfakes/misinformation) and not worth the risk for this brand.
+- If the news is conceptual/abstract (market moves, charts, general crypto/AI themes,
+  no specific real face needed), set "visual_type" to "ai_generated" and give a
+  detailed "ai_image_prompt" for an AI art tool - abstract/conceptual imagery only,
+  NO real people, NO text baked into the image (text gets added later in Canva).
+
+Return ONLY JSON (no markdown, no extra text):
+{{
+ "hooks": ["3 punchy slide-1 hook options"],
+ "why_hook": "one short line: why these hooks stop the scroll",
+ "slides": ["slide 2 text", "slide 3 text"],
+ "highlight": "the single punchline for the accent color",
+ "thumbnail_text": "the bold words to put ON the cover image",
+ "caption": "short post caption",
+ "visual_type": "real_photo" | "ai_generated",
+ "visual_direction": "what photo/image to use and why",
+ "ai_image_prompt": "prompt for AI art tool, or empty string if visual_type is real_photo",
+ "formats": {{"tiktok": "one-line tip", "instagram": "...", "threads": "...", "x": "..."}},
+ "hashtags": {{"tiktok": ["5-7 tags"], "instagram": ["..."], "threads": ["..."], "x": ["..."]}}
+}}
+
+News:
+{news_text}
+"""
+    resp = client.messages.create(
+        model=JAYDEN_MODEL, max_tokens=2000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = "".join(b.text for b in resp.content if b.type == "text").strip()
+    s, e = text.find("{"), text.rfind("}")
+    if s != -1 and e != -1:
+        text = text[s:e + 1]
+    return json.loads(text)
+
+
+def format_pack(p):
+    esc = html.escape
+    hooks = "\n".join(f"  {i + 1}. {esc(h)}" for i, h in enumerate(p.get("hooks", [])))
+    slides = "\n".join(f"  • {esc(s)}" for s in p.get("slides", []))
+    order = ["tiktok", "instagram", "threads", "x"]
+    fmts = p.get("formats", {})
+    fmt_lines = "\n".join(f"  <b>{k.title()}:</b> {esc(fmts[k])}" for k in order if fmts.get(k))
+    tags = p.get("hashtags", {})
+    tag_lines = "\n".join(
+        f"  <b>{k.title()}:</b> {esc(' '.join(tags[k]))}" for k in order if tags.get(k))
+
+    vtype = p.get("visual_type", "")
+    if vtype == "real_photo":
+        visual_block = f"📷 <b>Use a REAL photo:</b> {esc(p.get('visual_direction', ''))}"
+    else:
+        visual_block = (
+            f"🎨 <b>AI image prompt:</b> {esc(p.get('visual_direction', ''))}\n"
+            f"<code>{esc(p.get('ai_image_prompt', ''))}</code>"
+        )
+
+    return (
+        f"✍️ <b>JAYDEN CONTENT PACK</b>\n\n"
+        f"🎣 <b>Slide 1 — Hook options:</b>\n{hooks}\n"
+        f"<i>Why it works: {esc(p.get('why_hook', ''))}</i>\n\n"
+        f"📄 <b>Next slides:</b>\n{slides}\n\n"
+        f"✨ <b>Highlight line:</b> {esc(p.get('highlight', ''))}\n"
+        f"🖼️ <b>Thumbnail text:</b> {esc(p.get('thumbnail_text', ''))}\n\n"
+        f"{visual_block}\n\n"
+        f"📝 <b>Caption:</b>\n{esc(p.get('caption', ''))}\n\n"
+        f"📐 <b>Format per platform:</b>\n{fmt_lines}\n\n"
+        f"#️⃣ <b>Hashtags:</b>\n{tag_lines}"
+    )
 
 
 def main():
@@ -304,9 +396,20 @@ def main():
         n = a.get("n")
         if not isinstance(n, int) or n < 1 or n > len(items):
             continue
-        if send_telegram(format_message(items[n - 1], a)):
+        item = items[n - 1]
+        if send_telegram(format_message(item, a)):
             sent += 1
             time.sleep(1)
+
+        # Auto-trigger Jayden for high-priority alerts only (keeps cost low)
+        if JAYDEN_BOT_TOKEN and str(a.get("virality_potential", "")).lower() == "high":
+            try:
+                log("High-priority alert -> generating Jayden content pack...")
+                pack = generate_pack(item, a)
+                send_telegram(format_pack(pack), token=JAYDEN_BOT_TOKEN)
+                time.sleep(1)
+            except Exception as ex:
+                log(f"Jayden pack generation failed: {ex}")
     log(f"Sent {sent} alert(s). Done.")
 
 
