@@ -367,7 +367,7 @@ News:
     return json.loads(text)
 
 
-def format_pack(p):
+def format_pack(p, news_title=""):
     esc = html.escape
     hooks = "\n".join(f"  {i + 1}. {esc(h)}" for i, h in enumerate(p.get("hooks", [])))
     slides = "\n".join(f"  • {esc(s)}" for s in p.get("slides", []))
@@ -388,7 +388,8 @@ def format_pack(p):
         )
 
     return (
-        f"✍️ <b>JAYDEN CONTENT PACK</b>\n\n"
+        f"✍️ <b>JAYDEN CONTENT PACK</b>\n"
+        f"📰 <b>News:</b> {esc(news_title)}\n\n"
         f"🎣 <b>Slide 1 — Hook options:</b>\n{hooks}\n"
         f"<i>Why it works: {esc(p.get('why_hook', ''))}</i>\n\n"
         f"📄 <b>Next slides:</b>\n{slides}\n\n"
@@ -434,7 +435,7 @@ def main():
             try:
                 log("High-priority alert -> generating Jayden content pack...")
                 pack = generate_pack(item, a)
-                send_telegram(format_pack(pack), token=JAYDEN_BOT_TOKEN)
+                send_telegram(format_pack(pack, item['title']), token=JAYDEN_BOT_TOKEN)
                 time.sleep(1)
             except Exception as ex:
                 log(f"Jayden pack generation failed: {ex}")
