@@ -353,7 +353,20 @@ News:
     s, e = text.find("{"), text.rfind("}")
     if s != -1 and e != -1:
         text = text[s:e + 1]
-    return json.loads(text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as je:
+        # Log what Claude actually sent back so a repeat failure is diagnosable,
+        # then retry once with a firmer instruction before giving up.
+        log(f"Jayden JSON parse failed: {je}. Raw (first 300 chars): {text[:300]!r}")
+        retry_prompt = prompt + "\n\nIMPORTANT: reply with ONLY the JSON object, nothing else - no caveats, no prose before or after."
+        resp2 = client.messages.create(model=JAYDEN_MODEL, max_tokens=2000,
+                                       messages=[{"role": "user", "content": retry_prompt}])
+        text2 = "".join(b.text for b in resp2.content if b.type == "text").strip()
+        s2, e2 = text2.find("{"), text2.rfind("}")
+        if s2 != -1 and e2 != -1:
+            text2 = text2[s2:e2 + 1]
+        return json.loads(text2)  # let it raise clearly if the retry also fails
 
 
 # Posting-time guidance (Jakarta/WIB) - static reference, backed by 2026 platform
