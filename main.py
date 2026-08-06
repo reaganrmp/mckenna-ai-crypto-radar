@@ -1,18 +1,17 @@
 """
-McKenna + Jayden + Colton - AI/Crypto Content Radar
-----------------------------------------------------
+McKenna + Jayden - AI/Crypto Content Radar
+--------------------------------------------
 McKenna : finds fresh AI/crypto/regulation news (ID + international) and alerts you.
 Jayden  : for the highest-priority stories, writes a ready-to-post content pack
-          (hooks, slides, caption, formats, hashtags).
-Colton  : generates an on-brand background image and composites the FINISHED,
-          ready-to-post image (headline + teal highlight + your logo baked in).
+          (hooks, slides, caption, formats, hashtags) PLUS a full, ready-to-paste
+          image-generation prompt (styled to your teal brand) - you generate and
+          design the image yourself in whatever tool you like.
 
-ON-DEMAND COMMAND (new):
+ON-DEMAND COMMAND:
   Message McKenna's bot with:      regen: <paste the headline or story text>
-  On the next run (within ~30 min, or trigger the workflow manually for instant),
-  you'll get a fresh Jayden pack + Colton image for exactly that story - even if
-  it's old news, got missed, or errored the first time. No code, no waiting on
-  auto-detection.
+  On the next run (or trigger the workflow manually for instant), you'll get a
+  fresh Jayden pack for exactly that story - even if it's old news, got missed,
+  or you just want another version. No code, no waiting on auto-detection.
 
 You do NOT need to edit any code to run this. Tweak the CONFIG block if you want
 to change check frequency, sources, or the pack cap.
@@ -20,11 +19,9 @@ to change check frequency, sources, or the pack cap.
 
 import os
 import sys
-import io
 import json
 import time
 import html
-import textwrap
 from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 
@@ -39,10 +36,9 @@ except Exception:
 # ------------------------- CONFIG (safe to tweak later) -------------------------
 LOOKBACK_MINUTES = 20          # treat news from the last N minutes as "new"
 MAX_ITEMS_PER_RUN = 20         # safety cap so a news burst can't spike your bill
-MAX_PACKS_PER_RUN = 4          # cap on Jayden/Colton (slow+costly) per run
+MAX_PACKS_PER_RUN = 4          # cap on Jayden packs (Sonnet calls) per run
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"     # McKenna's cheap news filter
 JAYDEN_MODEL = "claude-sonnet-5"               # better copywriting for packs
-TOGETHER_IMAGE_MODEL = "black-forest-labs/FLUX.1-schnell-Free"  # swap to non-Free if you go paid
 
 RSS_FEEDS = [
     "https://cointelegraph.com/rss",
@@ -67,17 +63,9 @@ GOOGLE_NEWS = [
 ]
 
 TEST_MODE = os.environ.get("TEST_MODE") == "1"
-# --------------------------------------------------------------------------------
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-CRYPTOPANIC_TOKEN = os.environ.get("CRYPTOPANIC_TOKEN")    # optional
-JAYDEN_BOT_TOKEN = os.environ.get("JAYDEN_BOT_TOKEN")      # optional - enables content packs
-TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")      # unused now - Colton runs on free Pollinations.ai instead
-
-FLAGS = {"ID": "🇮🇩", "US": "🇺🇸", "CN": "🇨🇳", "Global": "🌐"}
-VIRALITY_DOT = {"high": "🟢🟢🟢", "medium": "🟢🟢⚪", "low": "🟢⚪⚪"}
+# The look every image prompt is built around - your brand, applied consistently
+# so every prompt (wherever you paste it) points toward the same visual identity.
 BRAND_STYLE = (
     "cinematic editorial tech-news key art, near-black background, "
     "deep teal (#367588) rim lighting and atmospheric glow as the dominant accent, "
@@ -85,10 +73,18 @@ BRAND_STYLE = (
     "dramatic single-source lighting, glossy premium finish, "
     "strong empty negative space in the lower third for headline text, "
     "photorealistic, ultra-detailed, 8k, shallow depth of field, "
-    "no text, no letters, no words, no watermark, no logos, "
-    "no people, no human figures, no silhouettes of people, no faces, no hands, "
-    "purely objects/abstract/environmental scene only"
+    "no text, no letters, no words, no watermark, no logos"
 )
+# --------------------------------------------------------------------------------
+
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+CRYPTOPANIC_TOKEN = os.environ.get("CRYPTOPANIC_TOKEN")    # optional
+JAYDEN_BOT_TOKEN = os.environ.get("JAYDEN_BOT_TOKEN")      # optional - enables content packs
+
+FLAGS = {"ID": "🇮🇩", "US": "🇺🇸", "CN": "🇨🇳", "Global": "🌐"}
+VIRALITY_DOT = {"high": "🟢🟢🟢", "medium": "🟢🟢⚪", "low": "🟢⚪⚪"}
 
 
 def log(msg):
@@ -277,10 +273,11 @@ def format_message(item, a):
     )
 
 
-# ============================== JAYDEN (CONTENT PACK) ============================
+# ============================== JAYDEN (CONTENT PACK + PROMPT) ===================
 
 def generate_pack(item, extra_context=""):
-    """Turns a headline (+ optional summary/context) into a ready-to-post pack."""
+    """Turns a headline (+ optional summary/context) into a ready-to-post pack,
+    including a full ready-to-paste image-generation prompt."""
     from anthropic import Anthropic
     client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -314,35 +311,32 @@ explain it in the same breath. End with a short question or line that invites re
 The hook is the dramatic version of the headline; the caption is the clear, honest
 explanation behind it. Never leave the reader confused about what actually happened.
 
-VISUAL RULE:
+IMAGE RULE (this becomes a prompt YOU (the user) will paste into an AI image tool
+yourself and generate manually, then design in Canva):
 - If the news centers on a WIDELY RECOGNIZED public figure (a well-known CEO,
   official, politician, celebrity - someone the audience would recognize on sight),
   set "visual_type" to "real_photo" and in "visual_direction" describe the REAL
-  news photo to search for (dark/desaturated background, subject well-lit,
-  dramatic). We never fabricate images of a recognizable real person's likeness.
-- If the news involves a real but NOT widely-recognized person (a named individual
-  the audience wouldn't recognize on sight - e.g. "a hacker named Chris Brooks",
-  "a scam victim", "an anonymous employee"), set "visual_type" to "ai_illustrative".
-  In "visual_direction", describe a GENERIC illustrative scene showing anonymous,
-  non-specific figures acting out the situation (e.g. "a person in a hoodie at a
-  laptop, face obscured/turned away") - never attempt to replicate what the real
-  individual actually looks like. This will be honestly labeled "AI Generated"
-  on the image, same transparency practice professional crypto media uses for
-  illustrative art.
-- Otherwise (no person at all in the story) set "visual_type" to "ai_generated".
-  In "visual_direction", describe ONE clear, concrete, OBJECT-based or
-  ENVIRONMENTAL scene - never a person, figure, or silhouette of any kind, even a
-  faceless/mysterious one. Ground it in the story's actual facts (the number, the
-  scale, the place) and match its EMOTIONAL TONE:
-    - good news / growth / big numbers -> abundance and motion: e.g. glowing money
-      or coins flowing/cascading, light trails surging upward, a glowing map lighting
-      up, energy radiating outward
-    - bad news / risk / warning -> tension and danger: e.g. cracks spreading through
-      a glowing coin, a chart line breaking downward in sparks, warning-red fractures
-    - regulation / policy -> structure and authority: e.g. glowing gavel-like light
-      beams, a sealed/locking mechanism, official document motifs rendered abstractly
-  Always concrete and specific to THIS story's number/place/scale - never generic
-  "digital finance" stock imagery. No text in the image.
+  news photo to search for instead (dark/desaturated, dramatic). Never write an
+  image-generation prompt for a specific recognizable real person's face - that's
+  a deepfake risk. Leave "image_prompt" empty in this case.
+- If the news involves a real but NOT widely-recognized person (someone the
+  audience wouldn't recognize on sight), set "visual_type" to "ai_illustrative" and
+  write an "image_prompt" showing GENERIC anonymous figures acting out the scene
+  (e.g. "a person in a hoodie at a laptop, face turned away/obscured") - never
+  attempt to replicate what the real individual actually looks like.
+- Otherwise (no person in the story) set "visual_type" to "ai_generated" and write
+  an "image_prompt" for a concrete OBJECT-based or ENVIRONMENTAL scene - no people
+  at all, not even a silhouette. Ground it in the story's actual facts (the number,
+  the scale, the place) - never generic stock imagery - and match its EMOTIONAL TONE:
+    - good news / growth -> abundance/motion: glowing money or coins flowing,
+      light trails surging upward, a glowing map lighting up
+    - bad news / risk -> tension/danger: cracks spreading through a glowing coin,
+      a chart line breaking downward in sparks, warning-red fractures
+    - regulation / policy -> structure/authority: glowing gavel-like light beams,
+      a sealed/locking mechanism, abstract official document motifs
+For "ai_illustrative" and "ai_generated", write "image_prompt" as a full, detailed,
+ready-to-paste prompt (3-5 sentences): the concrete subject/scene first, then this
+exact style block appended: "{BRAND_STYLE}"
 
 Return ONLY JSON (no markdown, no extra text):
 {{
@@ -353,7 +347,8 @@ Return ONLY JSON (no markdown, no extra text):
  "thumbnail_text": "the bold words to put ON the cover image",
  "caption": "3-5 sentence plain-language explanation per the CAPTION RULE above",
  "visual_type": "real_photo" | "ai_illustrative" | "ai_generated",
- "visual_direction": "one clear sentence describing the image concept",
+ "visual_direction": "one line summary of the image concept",
+ "image_prompt": "the full ready-to-paste prompt (empty string if visual_type is real_photo)",
  "formats": {{"tiktok": "one-line tip", "instagram": "...", "threads": "...", "x": "..."}},
  "hashtags": {{"tiktok": ["5-7 tags"], "instagram": ["..."], "threads": ["..."], "x": ["..."]}}
 }}
@@ -382,20 +377,17 @@ def format_pack(p, news_title=""):
         f"  <b>{k.title()}:</b> {esc(' '.join(tags[k]))}" for k in order if tags.get(k))
 
     vtype = p.get("visual_type", "")
-    label = "📷 <b>Use a REAL photo:</b>" if vtype == "real_photo" else "🎨 <b>Visual:</b>"
+    label = "📷 <b>Use a REAL photo:</b>" if vtype == "real_photo" else "🎨 <b>Visual concept:</b>"
     visual_block = f"{label} {esc(p.get('visual_direction', ''))}"
 
-    # Full copyable prompt (same one Colton uses automatically) - so you can also
-    # paste it into ChatGPT/Midjourney/Magnific yourself if you want manual control
-    # or a different result. Not shown for real_photo since that needs an actual photo.
     prompt_block = ""
-    if vtype != "real_photo":
-        subject = p.get("visual_direction", "")
-        full_prompt = f"{subject}. {BRAND_STYLE}"
+    if vtype != "real_photo" and p.get("image_prompt"):
         prompt_block = (
-            f"\n🖨️ <b>Copy-paste prompt (for ChatGPT/Midjourney/Magnific etc):</b>\n"
-            f"<code>{esc(full_prompt)}</code>\n"
+            f"\n🖨️ <b>Copy-paste image prompt:</b>\n"
+            f"<code>{esc(p.get('image_prompt', ''))}</code>\n"
         )
+    elif vtype == "ai_illustrative":
+        prompt_block = "\n<i>Tip: label this post \"AI Generated\" for transparency, same as top crypto media do.</i>\n"
 
     return (
         f"✍️ <b>JAYDEN CONTENT PACK</b>\n"
@@ -411,163 +403,6 @@ def format_pack(p, news_title=""):
         f"📐 <b>Format per platform:</b>\n{fmt_lines}\n\n"
         f"#️⃣ <b>Hashtags:</b>\n{tag_lines}"
     )
-
-
-# ============================== COLTON (IMAGE) ===================================
-
-NEGATIVE_PROMPT = (
-    "person, people, human, man, woman, character, warrior, knight, anime character, "
-    "video game character, portrait, face, hands, fantasy character, creature, "
-    "text, letters, words, watermark, logo, signature, caption, title, writing, "
-    "blurry, low quality, low detail, distorted, deformed, mutated, extra limbs, "
-    "grainy, pixelated, jpeg artifacts, oversaturated, ugly, amateur"
-)
-# Used for the "ai_illustrative" case: generic anonymous people ARE allowed (no
-# specific real face is being replicated), just no fantasy/game-character drift.
-NEGATIVE_PROMPT_ALLOW_PEOPLE = (
-    "text, letters, words, watermark, logo, signature, caption, title, writing, "
-    "fantasy character, video game character, anime character, armor, wings, "
-    "blurry, low quality, low detail, distorted, deformed, mutated, extra limbs, "
-    "grainy, pixelated, jpeg artifacts, oversaturated, ugly, amateur"
-)
-
-
-def generate_image(visual_direction, news_title, allow_generic_people=False):
-    """Uses Pollinations.ai (free, no API key, no card needed) - just a URL hit.
-    model=flux-realism gives rich detail/lighting. enhance=OFF because it lets an
-    LLM rewrite the prompt and was drifting the concept off-topic (e.g. into fantasy
-    game characters). A real 'negative' param is used instead of just saying "no X"
-    in the positive prompt, which diffusion models routinely ignore."""
-    import random
-    subject = visual_direction or news_title
-    prompt = f"{subject}. {BRAND_STYLE}"
-    seed = random.randint(1, 999999)  # avoids getting a cached/repeated image
-    negative = NEGATIVE_PROMPT_ALLOW_PEOPLE if allow_generic_people else NEGATIVE_PROMPT
-    url = (f"https://image.pollinations.ai/prompt/{quote(prompt[:800])}"
-           f"?width=1536&height=1920&model=flux-realism&nologo=true&seed={seed}"
-           f"&negative={quote(negative)}")
-    try:
-        r = requests.get(url, timeout=120)
-        if r.status_code != 200 or len(r.content) < 1000:
-            log(f"Pollinations error {r.status_code}, size={len(r.content)}")
-            return None
-        return url  # fetchable directly for both Telegram sendPhoto and our own re-fetch
-    except Exception as e:
-        log(f"Image generation failed: {e}")
-        return None
-
-
-def compose_final_post(bg_bytes, headline, highlight_phrase, source_name="", ai_disclosure=False):
-    """Composites Colton's background + Jayden's headline into a finished,
-    ready-to-post 1080x1350 image with logo, gradient, and text baked in."""
-    from PIL import Image, ImageDraw, ImageFont
-
-    W, H = 1080, 1350
-    TEAL = (54, 117, 136)
-    FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
-
-    bg = Image.open(io.BytesIO(bg_bytes)).convert("RGB")
-    src_ratio, tgt_ratio = bg.width / bg.height, W / H
-    if src_ratio > tgt_ratio:
-        new_w = int(bg.height * tgt_ratio)
-        bg = bg.crop(((bg.width - new_w) // 2, 0, (bg.width + new_w) // 2, bg.height))
-    else:
-        new_h = int(bg.width / tgt_ratio)
-        bg = bg.crop((0, (bg.height - new_h) // 2, bg.width, (bg.height + new_h) // 2))
-    bg = bg.resize((W, H))
-
-    grad = Image.new("L", (1, H), 0)
-    for y in range(H):
-        if y > H * 0.40:
-            t = (y - H * 0.40) / (H * 0.60)
-            grad.putpixel((0, y), int(240 * t))
-    grad = grad.resize((W, H))
-    black = Image.new("RGB", (W, H), (5, 5, 5))
-    bg = Image.composite(black, bg, grad)
-
-    draw = ImageDraw.Draw(bg)
-    logo_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Bold.ttf", 38)
-    src_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Regular.ttf", 24)
-
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
-    if os.path.exists(logo_path):
-        logo = Image.open(logo_path).convert("RGBA")
-        target_h = 110
-        scale = target_h / logo.height
-        logo = logo.resize((int(logo.width * scale), target_h))
-        bg.paste(logo, (50, 45), logo)
-    else:
-        draw.text((50, 50), "CRYPTOSPARK", font=logo_font, fill=(255, 255, 255))
-        draw.rectangle([50, 95, 58, 103], fill=TEAL)
-
-    # Keep the highlight phrase together on one line (swap its spaces for a
-    # placeholder so wrapping can't break it apart), then restore before drawing.
-    if highlight_phrase and highlight_phrase in headline:
-        token = highlight_phrase.replace(" ", "\x00")
-        headline_for_wrap = headline.replace(highlight_phrase, token)
-    else:
-        headline_for_wrap = headline
-
-    max_line_width = W - 100  # 50px margin each side
-
-    # Auto-shrink the font until every unbreakable chunk (words, and the
-    # highlight phrase) actually fits within the image - fixes overflow for
-    # long headlines/highlights instead of just guessing a fixed size.
-    font_size = 62
-    while font_size > 32:
-        test_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Bold.ttf", font_size)
-        widest_chunk = max(
-            draw.textlength(w.replace("\x00", " "), font=test_font)
-            for w in headline_for_wrap.split(" ")
-        )
-        if widest_chunk <= max_line_width:
-            break
-        font_size -= 4
-    else:
-        # Even the smallest size can't fit the highlight as one unbreakable chunk -
-        # give up protecting it and let it wrap normally, rather than overflow.
-        headline_for_wrap = headline_for_wrap.replace("\x00", " ")
-    head_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Bold.ttf", font_size)
-    line_height = int(font_size * 1.13)
-
-    # Real pixel-width wrapping (measures actual text, not a character-count guess)
-    words = headline_for_wrap.split(" ")
-    lines, current = [], ""
-    for word in words:
-        trial = f"{current} {word}".strip()
-        trial_measured = trial.replace("\x00", " ")  # measure with real spaces, not the placeholder
-        if draw.textlength(trial_measured, font=head_font) <= max_line_width or not current:
-            current = trial
-        else:
-            lines.append(current)
-            current = word
-    if current:
-        lines.append(current)
-    wrapped = [line.replace("\x00", " ") for line in lines]
-
-    y_text = H - 220 - (len(wrapped) * line_height)
-    for line in wrapped:
-        x = 50
-        if highlight_phrase and highlight_phrase in line:
-            pre, _, post = line.partition(highlight_phrase)
-            draw.text((x, y_text), pre, font=head_font, fill=(255, 255, 255))
-            pre_w = draw.textlength(pre, font=head_font)
-            draw.text((x + pre_w, y_text), highlight_phrase, font=head_font, fill=TEAL)
-            hi_w = draw.textlength(highlight_phrase, font=head_font)
-            draw.text((x + pre_w + hi_w, y_text), post, font=head_font, fill=(255, 255, 255))
-        else:
-            draw.text((x, y_text), line, font=head_font, fill=(255, 255, 255))
-        y_text += 70
-
-    if source_name:
-        credit = f"Sumber: AI Generated" if ai_disclosure else f"Sumber: {source_name}"
-        draw.text((50, H - 55), credit, font=src_font, fill=(160, 160, 160))
-    elif ai_disclosure:
-        draw.text((50, H - 55), "Sumber: AI Generated", font=src_font, fill=(160, 160, 160))
-
-    out = io.BytesIO()
-    bg.save(out, format="PNG")
-    return out.getvalue()
 
 
 # ============================== TELEGRAM HELPERS =================================
@@ -587,33 +422,6 @@ def send_telegram(text, token=None):
         return False
 
 
-def send_telegram_photo(image_url, caption, token):
-    url = f"https://api.telegram.org/bot{token}/sendPhoto"
-    try:
-        r = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "photo": image_url,
-                                     "caption": caption[:1000], "parse_mode": "HTML"}, timeout=60)
-        if r.status_code != 200:
-            log(f"Telegram photo error {r.status_code}: {r.text[:200]}")
-        return r.status_code == 200
-    except Exception as e:
-        log(f"Telegram photo send failed: {e}")
-        return False
-
-
-def send_telegram_photo_bytes(image_bytes, caption, token):
-    url = f"https://api.telegram.org/bot{token}/sendPhoto"
-    try:
-        r = requests.post(url,
-                          data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption[:1000], "parse_mode": "HTML"},
-                          files={"photo": ("post.png", image_bytes, "image/png")}, timeout=60)
-        if r.status_code != 200:
-            log(f"Telegram photo(bytes) error {r.status_code}: {r.text[:200]}")
-        return r.status_code == 200
-    except Exception as e:
-        log(f"Telegram photo(bytes) send failed: {e}")
-        return False
-
-
 def get_updates(token):
     try:
         r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates?timeout=0", timeout=25)
@@ -630,11 +438,10 @@ def clear_updates(token, offset):
         log(f"clear_updates error: {e}")
 
 
-# ============================== PACK + IMAGE PIPELINE =============================
+# ============================== PACK PIPELINE =====================================
 
 def run_pack_pipeline(item, extra_context="", label="story"):
-    """Shared by both the auto high-priority path and the manual 'regen:' command.
-    Generates a Jayden pack, sends it, then generates + composites + sends Colton's image."""
+    """Shared by both the auto high-priority path and the manual 'regen:' command."""
     if not JAYDEN_BOT_TOKEN:
         log("No JAYDEN_BOT_TOKEN set - skipping pack generation.")
         return False
@@ -642,50 +449,17 @@ def run_pack_pipeline(item, extra_context="", label="story"):
         log(f"Generating pack for {label}: {item['title'][:60]}...")
         pack = generate_pack(item, extra_context)
         send_telegram(format_pack(pack, item["title"]), token=JAYDEN_BOT_TOKEN)
-        time.sleep(1)
+        return True
     except Exception as ex:
         log(f"Pack generation failed for {label}: {ex}")
         send_telegram(f"⚠️ Jayden hit a snag on: {html.escape(item['title'][:100])}\n({ex})",
                       token=JAYDEN_BOT_TOKEN)
         return False
 
-    # Colton (Pollinations) needs no API key - always try
-
-    try:
-        log(f"Colton: generating background for {label}...")
-        vtype = pack.get("visual_type", "ai_generated")
-        img_url = generate_image(pack.get("visual_direction", ""), item["title"],
-                                  allow_generic_people=(vtype == "ai_illustrative"))
-        if not img_url:
-            log("Colton: no image produced.")
-            return True
-
-        if vtype == "real_photo":
-            note = ("🖼️ <b>Colton background</b> (this story has a real, recognizable "
-                    "person - add their real photo yourself, this is a supporting element)")
-            send_telegram_photo(img_url, note, JAYDEN_BOT_TOKEN)
-            return True
-
-        bg_bytes = requests.get(img_url, timeout=30).content
-        hooks = pack.get("hooks", [])
-        headline = hooks[0] if hooks else pack.get("thumbnail_text", "")
-        final_png = compose_final_post(bg_bytes, headline=headline,
-                                       highlight_phrase=pack.get("highlight", ""),
-                                       source_name=item.get("source", ""),
-                                       ai_disclosure=(vtype == "ai_illustrative"))
-        cap = f"✅ Ready to post.\n📝 {html.escape(pack.get('caption', '')[:600])}"
-        send_telegram_photo_bytes(final_png, cap, JAYDEN_BOT_TOKEN)
-        return True
-    except Exception as ex:
-        log(f"Colton failed for {label}: {ex}")
-        send_telegram(f"⚠️ Colton hit a snag on: {html.escape(item['title'][:100])}\n({ex})",
-                      token=JAYDEN_BOT_TOKEN)
-        return False
-
 
 def handle_regen_commands():
-    """Checks McKenna's bot for 'regen: <text>' messages from you and (re)generates
-    a full Jayden pack + Colton image for that exact text, on demand."""
+    """Checks McKenna's bot for 'regen: <text>' messages from you and generates
+    a fresh Jayden pack for that exact text, on demand."""
     if not TELEGRAM_BOT_TOKEN:
         return
     updates = get_updates(TELEGRAM_BOT_TOKEN)
@@ -731,8 +505,7 @@ def main():
         log("Missing required secrets: " + ", ".join(missing))
         sys.exit(1)
 
-    # 1) Handle any manual "regen:" requests first - fast, and works even if
-    #    the news-fetch part below finds nothing new this run.
+    # 1) Handle any manual "regen:" requests first
     handle_regen_commands()
 
     # 2) Normal automatic news scan
@@ -769,6 +542,7 @@ def main():
         if JAYDEN_BOT_TOKEN and str(a.get("virality_potential", "")).lower() == "high":
             if run_pack_pipeline(item, extra_context=a.get("summary", ""), label="auto high-priority"):
                 packs_made += 1
+                time.sleep(1)
 
     log(f"Sent {sent} alert(s), generated {packs_made} pack(s). Done.")
 
