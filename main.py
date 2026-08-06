@@ -85,7 +85,9 @@ BRAND_STYLE = (
     "dramatic single-source lighting, glossy premium finish, "
     "strong empty negative space in the lower third for headline text, "
     "photorealistic, ultra-detailed, 8k, shallow depth of field, "
-    "no text, no letters, no words, no watermark, no logos, no human faces"
+    "no text, no letters, no words, no watermark, no logos, "
+    "no people, no human figures, no silhouettes of people, no faces, no hands, "
+    "purely objects/abstract/environmental scene only"
 )
 
 
@@ -317,10 +319,19 @@ VISUAL RULE:
   politician), set "visual_type" to "real_photo" and in "visual_direction" describe
   the REAL news photo to search for (dark/desaturated background, subject well-lit,
   dramatic). We never fabricate images of real people.
-- Otherwise set "visual_type" to "ai_generated" and in "visual_direction" describe,
-  in ONE clear sentence, the concrete symbolic scene that best illustrates THIS
-  specific story - grounded in its actual facts (the number, the scale, the place),
-  never a generic stock scene. No real people. No text in the image.
+- Otherwise set "visual_type" to "ai_generated". In "visual_direction", describe ONE
+  clear, concrete, OBJECT-based or ENVIRONMENTAL scene - never a person, figure, or
+  silhouette of any kind, even a faceless/mysterious one. Ground it in the story's
+  actual facts (the number, the scale, the place) and match its EMOTIONAL TONE:
+    - good news / growth / big numbers -> abundance and motion: e.g. glowing money
+      or coins flowing/cascading, light trails surging upward, a glowing map lighting
+      up, energy radiating outward
+    - bad news / risk / warning -> tension and danger: e.g. cracks spreading through
+      a glowing coin, a chart line breaking downward in sparks, warning-red fractures
+    - regulation / policy -> structure and authority: e.g. glowing gavel-like light
+      beams, a sealed/locking mechanism, official document motifs rendered abstractly
+  Always concrete and specific to THIS story's number/place/scale - never generic
+  "digital finance" stock imagery. No real people. No text in the image.
 
 Return ONLY JSON (no markdown, no extra text):
 {{
@@ -381,15 +392,17 @@ def format_pack(p, news_title=""):
 # ============================== COLTON (IMAGE) ===================================
 
 def generate_image(visual_direction, news_title):
-    """Uses Pollinations.ai (free FLUX, no API key, no card needed) - just a URL hit."""
+    """Uses Pollinations.ai (free, no API key, no card needed) - just a URL hit.
+    model=flux-realism gives much richer detail/lighting than plain flux, and
+    enhance=true auto-expands the prompt for extra detail before generating."""
     import random
     subject = visual_direction or news_title
     prompt = f"{subject}. {BRAND_STYLE}"
     seed = random.randint(1, 999999)  # avoids getting a cached/repeated image
     url = (f"https://image.pollinations.ai/prompt/{quote(prompt[:800])}"
-           f"?width=1024&height=1280&nologo=true&seed={seed}")
+           f"?width=1536&height=1920&model=flux-realism&enhance=true&nologo=true&seed={seed}")
     try:
-        r = requests.get(url, timeout=90)
+        r = requests.get(url, timeout=120)
         if r.status_code != 200 or len(r.content) < 1000:
             log(f"Pollinations error {r.status_code}, size={len(r.content)}")
             return None
@@ -443,7 +456,15 @@ def compose_final_post(bg_bytes, headline, highlight_phrase, source_name=""):
         draw.text((50, 50), "CRYPTOSPARK", font=logo_font, fill=(255, 255, 255))
         draw.rectangle([50, 95, 58, 103], fill=TEAL)
 
-    wrapped = textwrap.wrap(headline, width=19)
+    # Keep the highlight phrase together on one line (swap its spaces for a
+    # placeholder so textwrap can't break it apart), then restore before drawing.
+    if highlight_phrase and highlight_phrase in headline:
+        token = highlight_phrase.replace(" ", "\x00")
+        headline_for_wrap = headline.replace(highlight_phrase, token)
+    else:
+        headline_for_wrap = headline
+    wrapped = textwrap.wrap(headline_for_wrap, width=19, break_long_words=False)
+    wrapped = [line.replace("\x00", " ") for line in wrapped]
     y_text = H - 220 - (len(wrapped) * 70)
     for line in wrapped:
         x = 50
