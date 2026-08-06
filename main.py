@@ -66,15 +66,6 @@ TEST_MODE = os.environ.get("TEST_MODE") == "1"
 
 # The look every image prompt is built around - your brand, applied consistently
 # so every prompt (wherever you paste it) points toward the same visual identity.
-BRAND_STYLE = (
-    "cinematic editorial tech-news key art, near-black background, "
-    "deep teal (#367588) rim lighting and atmospheric glow as the dominant accent, "
-    "subtle warm amber highlight as secondary accent, high contrast, deep shadows, "
-    "dramatic single-source lighting, glossy premium finish, "
-    "strong empty negative space in the lower third for headline text, "
-    "photorealistic, ultra-detailed, 8k, shallow depth of field, "
-    "no text, no letters, no words, no watermark, no logos"
-)
 # --------------------------------------------------------------------------------
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
@@ -277,7 +268,7 @@ def format_message(item, a):
 
 def generate_pack(item, extra_context=""):
     """Turns a headline (+ optional summary/context) into a ready-to-post pack,
-    including a full ready-to-paste image-generation prompt."""
+    including your ChatGPT master-prompt template filled in per the story."""
     from anthropic import Anthropic
     client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
@@ -293,7 +284,7 @@ of top Indonesian crypto media (dark dramatic image + bold headline + one highli
 phrase, minimal text, no over-explaining). Write in {lang}.
 
 Rules:
-- ONE slide 1 headline, punchy, confident, not corporate. Mark the single most
+- ONE slide 1 hook, punchy, confident, not corporate. Mark the single most
   important phrase within it as the "highlight" (the part that goes in accent color).
 - Only include a second slide if there's a genuine "receipt" to show - a stat, a quote,
   a price number, something that proves the claim. NOT an explanation. If there's nothing
@@ -302,7 +293,7 @@ Rules:
 
 CAPTION RULE (important - this is what the audience actually reads):
 The caption must make ANY reader fully understand the story, even if they know
-nothing about crypto or AI. In 3-5 short sentences, plainly cover:
+nothing about crypto or AI. Cover, in this order:
   1. WHAT happened (the concrete event, with the key number/name)
   2. WHY it happened / the context behind it
   3. WHAT it means for the reader - who gains, who loses, what changes
@@ -310,45 +301,45 @@ Write in simple everyday language, no jargon. If you must use a technical term,
 explain it in the same breath. End with a short question or line that invites replies.
 The hook is the dramatic version of the headline; the caption is the clear, honest
 explanation behind it. Never leave the reader confused about what actually happened.
+FORMATTING (critical - this is read on a phone, make it easy to skim, not a wall
+of text): write it as SHORT PARAGRAPHS, 1-2 sentences each, separated by a blank
+line between each paragraph. Roughly one paragraph per point above (what/why/what
+it means), plus a final short paragraph with the reply-inviting question. Never
+write it as a single dense block.
 
-IMAGE RULE (this becomes a prompt YOU (the user) will paste into an AI image tool
-yourself and generate manually, then design in Canva):
-- If the news centers on a WIDELY RECOGNIZED public figure (a well-known CEO,
-  official, politician, celebrity - someone the audience would recognize on sight),
-  set "visual_type" to "real_photo" and in "visual_direction" describe the REAL
-  news photo to search for instead (dark/desaturated, dramatic). Never write an
-  image-generation prompt for a specific recognizable real person's face - that's
-  a deepfake risk. Leave "image_prompt" empty in this case.
-- If the news involves a real but NOT widely-recognized person (someone the
-  audience wouldn't recognize on sight), set "visual_type" to "ai_illustrative" and
-  write an "image_prompt" showing GENERIC anonymous figures acting out the scene
-  (e.g. "a person in a hoodie at a laptop, face turned away/obscured") - never
-  attempt to replicate what the real individual actually looks like.
-- Otherwise (no person in the story) set "visual_type" to "ai_generated" and write
-  an "image_prompt" for a concrete OBJECT-based or ENVIRONMENTAL scene - no people
-  at all, not even a silhouette. Ground it in the story's actual facts (the number,
-  the scale, the place) - never generic stock imagery - and match its EMOTIONAL TONE:
-    - good news / growth -> abundance/motion: glowing money or coins flowing,
-      light trails surging upward, a glowing map lighting up
-    - bad news / risk -> tension/danger: cracks spreading through a glowing coin,
-      a chart line breaking downward in sparks, warning-red fractures
-    - regulation / policy -> structure/authority: glowing gavel-like light beams,
-      a sealed/locking mechanism, abstract official document motifs
-For "ai_illustrative" and "ai_generated", write "image_prompt" as a full, detailed,
-ready-to-paste prompt (3-5 sentences): the concrete subject/scene first, then this
-exact style block appended: "{BRAND_STYLE}"
+MASTER PROMPT TEMPLATE FIELDS (fills the user's saved ChatGPT image-gen template):
+- "article": a short 2-4 sentence plain summary of the actual news (this is the
+  ARTICLE field - context for the image AI, not the caption)
+- "template_headline": the short headline to render ON the image (can equal the hook)
+- "template_hook": the punchy dramatic hook line (may be same as a chosen hook)
+- "template_category": pick EXACTLY ONE from this fixed list based on the story:
+  Breaking, Markets, AI, Guide, Feature, Analysis, Regulation
+- If the news centers on a WIDELY RECOGNIZED public figure (well-known CEO,
+  official, politician, celebrity), set "visual_type" to "real_photo" and
+  "special_requests" to a note telling the user to source a real photo themselves
+  (never fabricate a recognizable real person's face - deepfake risk).
+- If the news involves a real but NOT widely-recognized person, set "visual_type"
+  to "ai_illustrative" and "special_requests" to: "Generic anonymous figures only,
+  no real likeness attempted - label this post AI Generated for transparency."
+- Otherwise (no person in the story) set "visual_type" to "ai_generated" and
+  "special_requests" to a short note grounding the image in this story's specific
+  facts (the number/scale/place) and its emotional tone (growth->abundance/motion,
+  bad news->tension/cracks, regulation->structure/authority) - concrete, never
+  generic stock imagery, and always no real people/faces.
 
 Return ONLY JSON (no markdown, no extra text):
 {{
- "hooks": ["3 punchy slide-1 headline options"],
- "why_hook": "one short line: why these headlines stop the scroll",
+ "hooks": ["3 punchy hook options"],
+ "why_hook": "one short line: why these hooks stop the scroll",
  "slides": ["at most 1 short 'proof/receipt' line, or leave this list empty"],
- "highlight": "the exact phrase from the chosen headline to put in accent color",
- "thumbnail_text": "the bold words to put ON the cover image",
- "caption": "3-5 sentence plain-language explanation per the CAPTION RULE above",
+ "highlight": "the exact phrase from the chosen hook to put in accent color",
+ "caption": "short-paragraph plain-language explanation per the CAPTION RULE above (use \\n\\n between paragraphs)",
  "visual_type": "real_photo" | "ai_illustrative" | "ai_generated",
- "visual_direction": "one line summary of the image concept",
- "image_prompt": "the full ready-to-paste prompt (empty string if visual_type is real_photo)",
+ "article": "short plain summary for the ARTICLE template field",
+ "template_headline": "short headline for the HEADLINE template field",
+ "template_hook": "punchy hook for the HOOK template field",
+ "template_category": "Breaking|Markets|AI|Guide|Feature|Analysis|Regulation",
+ "special_requests": "per the visual_type rules above",
  "formats": {{"tiktok": "one-line tip", "instagram": "...", "threads": "...", "x": "..."}},
  "hashtags": {{"tiktok": ["5-7 tags"], "instagram": ["..."], "threads": ["..."], "x": ["..."]}}
 }}
@@ -365,7 +356,21 @@ News:
     return json.loads(text)
 
 
-def format_pack(p, news_title=""):
+# Posting-time guidance (Jakarta/WIB) - static reference, backed by 2026 platform
+# data, shown with every pack so it's always in front of you.
+POSTING_GUIDE = (
+    "📅 <b>Best times to post (WIB):</b>\n"
+    "  <b>TikTok:</b> 12–2 PM (lunch) or 7–10 PM · best days Wed/Fri/Sun\n"
+    "  <b>Instagram:</b> ~9 AM or 7–9 PM · best day Wednesday\n"
+    "  <b>Threads:</b> 9 AM–12 PM · best day Wednesday\n"
+    "  <b>X:</b> 12–6 PM · best days Tue–Thu\n\n"
+    "📊 <b>Suggested frequency:</b> 3-5 posts/day across platforms while building "
+    "the account, prioritizing consistency over volume - quality high-priority "
+    "stories only, not filler."
+)
+
+
+def format_pack(p, news_title="", item=None):
     esc = html.escape
     hooks = "\n".join(f"  {i + 1}. {esc(h)}" for i, h in enumerate(p.get("hooks", [])))
     slides = "\n".join(f"  • {esc(s)}" for s in p.get("slides", []))
@@ -377,31 +382,43 @@ def format_pack(p, news_title=""):
         f"  <b>{k.title()}:</b> {esc(' '.join(tags[k]))}" for k in order if tags.get(k))
 
     vtype = p.get("visual_type", "")
-    label = "📷 <b>Use a REAL photo:</b>" if vtype == "real_photo" else "🎨 <b>Visual concept:</b>"
-    visual_block = f"{label} {esc(p.get('visual_direction', ''))}"
+    source_name = (item or {}).get("source", "")
+    source_url = (item or {}).get("url", "")
+    source_line = f"{esc(source_name)}" + (f" - {esc(source_url)}" if source_url else "")
 
-    prompt_block = ""
-    if vtype != "real_photo" and p.get("image_prompt"):
-        prompt_block = (
-            f"\n🖨️ <b>Copy-paste image prompt:</b>\n"
-            f"<code>{esc(p.get('image_prompt', ''))}</code>\n"
+    if vtype == "real_photo":
+        template_block = (
+            f"📷 <b>Real photo needed:</b> {esc(p.get('special_requests', ''))}\n"
+            f"(Skip the ChatGPT template below for this one - source and edit a real photo instead.)"
         )
-    elif vtype == "ai_illustrative":
-        prompt_block = "\n<i>Tip: label this post \"AI Generated\" for transparency, same as top crypto media do.</i>\n"
+    else:
+        template_block = (
+            f"🖨️ <b>Master prompt (paste into your ChatGPT template):</b>\n"
+            f"<code>ARTICLE:\n{esc(p.get('article', ''))}\n\n"
+            f"HEADLINE:\n{esc(p.get('template_headline', ''))}\n\n"
+            f"HOOK:\n{esc(p.get('template_hook', ''))}\n\n"
+            f"CATEGORY:\n{esc(p.get('template_category', ''))}\n\n"
+            f"MOOD:\nAuto\n\n"
+            f"MAIN SUBJECT:\nAuto\n\n"
+            f"COUNTRY:\nAuto\n\n"
+            f"MAIN COLORS:\nAuto\n\n"
+            f"SPECIAL REQUESTS:\n{esc(p.get('special_requests', ''))}\n\n"
+            f"CAPTION:\n{esc(p.get('caption', ''))}</code>"
+        )
 
     return (
         f"✍️ <b>JAYDEN CONTENT PACK</b>\n"
         f"📰 <b>News:</b> {esc(news_title)}\n\n"
-        f"🎣 <b>Slide 1 — Hook options:</b>\n{hooks}\n"
+        f"🎣 <b>Hook options:</b>\n{hooks}\n"
         f"<i>Why it works: {esc(p.get('why_hook', ''))}</i>\n\n"
-        f"📄 <b>Next slides:</b>\n{slides}\n\n"
-        f"✨ <b>Highlight line:</b> {esc(p.get('highlight', ''))}\n"
-        f"🖼️ <b>Thumbnail text:</b> {esc(p.get('thumbnail_text', ''))}\n\n"
-        f"{visual_block}\n"
-        f"{prompt_block}\n"
+        f"📄 <b>Extra slide (if any):</b>\n{slides}\n\n"
+        f"✨ <b>Highlight:</b> {esc(p.get('highlight', ''))}\n\n"
+        f"{template_block}\n\n"
         f"📝 <b>Caption:</b>\n{esc(p.get('caption', ''))}\n\n"
         f"📐 <b>Format per platform:</b>\n{fmt_lines}\n\n"
-        f"#️⃣ <b>Hashtags:</b>\n{tag_lines}"
+        f"#️⃣ <b>Hashtags:</b>\n{tag_lines}\n\n"
+        f"🔗 <b>Source:</b> {source_line}\n\n"
+        f"{POSTING_GUIDE}"
     )
 
 
@@ -448,7 +465,7 @@ def run_pack_pipeline(item, extra_context="", label="story"):
     try:
         log(f"Generating pack for {label}: {item['title'][:60]}...")
         pack = generate_pack(item, extra_context)
-        send_telegram(format_pack(pack, item["title"]), token=JAYDEN_BOT_TOKEN)
+        send_telegram(format_pack(pack, item["title"], item=item), token=JAYDEN_BOT_TOKEN)
         return True
     except Exception as ex:
         log(f"Pack generation failed for {label}: {ex}")
