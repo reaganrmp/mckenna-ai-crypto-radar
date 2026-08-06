@@ -74,7 +74,7 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 CRYPTOPANIC_TOKEN = os.environ.get("CRYPTOPANIC_TOKEN")    # optional
 JAYDEN_BOT_TOKEN = os.environ.get("JAYDEN_BOT_TOKEN")      # optional - enables content packs
-TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")      # optional - enables Colton image generation
+TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")      # unused now - Colton runs on free Pollinations.ai instead
 
 FLAGS = {"ID": "🇮🇩", "US": "🇺🇸", "CN": "🇨🇳", "Global": "🌐"}
 VIRALITY_DOT = {"high": "🟢🟢🟢", "medium": "🟢🟢⚪", "low": "🟢⚪⚪"}
@@ -381,23 +381,19 @@ def format_pack(p, news_title=""):
 # ============================== COLTON (IMAGE) ===================================
 
 def generate_image(visual_direction, news_title):
-    if not TOGETHER_API_KEY:
-        return None
+    """Uses Pollinations.ai (free FLUX, no API key, no card needed) - just a URL hit."""
+    import random
     subject = visual_direction or news_title
     prompt = f"{subject}. {BRAND_STYLE}"
+    seed = random.randint(1, 999999)  # avoids getting a cached/repeated image
+    url = (f"https://image.pollinations.ai/prompt/{quote(prompt[:800])}"
+           f"?width=1024&height=1280&nologo=true&seed={seed}")
     try:
-        r = requests.post(
-            "https://api.together.xyz/v1/images/generations",
-            headers={"Authorization": f"Bearer {TOGETHER_API_KEY}", "Content-Type": "application/json"},
-            json={"model": TOGETHER_IMAGE_MODEL, "prompt": prompt[:1000],
-                  "width": 1024, "height": 1280, "steps": 4, "n": 1},
-            timeout=90,
-        )
-        if r.status_code != 200:
-            log(f"Together error {r.status_code}: {r.text[:200]}")
+        r = requests.get(url, timeout=90)
+        if r.status_code != 200 or len(r.content) < 1000:
+            log(f"Pollinations error {r.status_code}, size={len(r.content)}")
             return None
-        data = r.json().get("data", [])
-        return data[0].get("url") if data else None
+        return url  # fetchable directly for both Telegram sendPhoto and our own re-fetch
     except Exception as e:
         log(f"Image generation failed: {e}")
         return None
@@ -549,8 +545,7 @@ def run_pack_pipeline(item, extra_context="", label="story"):
                       token=JAYDEN_BOT_TOKEN)
         return False
 
-    if not TOGETHER_API_KEY:
-        return True
+    # Colton (Pollinations) needs no API key - always try
 
     try:
         log(f"Colton: generating background for {label}...")
