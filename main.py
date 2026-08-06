@@ -315,14 +315,25 @@ The hook is the dramatic version of the headline; the caption is the clear, hone
 explanation behind it. Never leave the reader confused about what actually happened.
 
 VISUAL RULE:
-- If the news centers on a real, named, identifiable person (a CEO, official,
-  politician), set "visual_type" to "real_photo" and in "visual_direction" describe
-  the REAL news photo to search for (dark/desaturated background, subject well-lit,
-  dramatic). We never fabricate images of real people.
-- Otherwise set "visual_type" to "ai_generated". In "visual_direction", describe ONE
-  clear, concrete, OBJECT-based or ENVIRONMENTAL scene - never a person, figure, or
-  silhouette of any kind, even a faceless/mysterious one. Ground it in the story's
-  actual facts (the number, the scale, the place) and match its EMOTIONAL TONE:
+- If the news centers on a WIDELY RECOGNIZED public figure (a well-known CEO,
+  official, politician, celebrity - someone the audience would recognize on sight),
+  set "visual_type" to "real_photo" and in "visual_direction" describe the REAL
+  news photo to search for (dark/desaturated background, subject well-lit,
+  dramatic). We never fabricate images of a recognizable real person's likeness.
+- If the news involves a real but NOT widely-recognized person (a named individual
+  the audience wouldn't recognize on sight - e.g. "a hacker named Chris Brooks",
+  "a scam victim", "an anonymous employee"), set "visual_type" to "ai_illustrative".
+  In "visual_direction", describe a GENERIC illustrative scene showing anonymous,
+  non-specific figures acting out the situation (e.g. "a person in a hoodie at a
+  laptop, face obscured/turned away") - never attempt to replicate what the real
+  individual actually looks like. This will be honestly labeled "AI Generated"
+  on the image, same transparency practice professional crypto media uses for
+  illustrative art.
+- Otherwise (no person at all in the story) set "visual_type" to "ai_generated".
+  In "visual_direction", describe ONE clear, concrete, OBJECT-based or
+  ENVIRONMENTAL scene - never a person, figure, or silhouette of any kind, even a
+  faceless/mysterious one. Ground it in the story's actual facts (the number, the
+  scale, the place) and match its EMOTIONAL TONE:
     - good news / growth / big numbers -> abundance and motion: e.g. glowing money
       or coins flowing/cascading, light trails surging upward, a glowing map lighting
       up, energy radiating outward
@@ -331,7 +342,7 @@ VISUAL RULE:
     - regulation / policy -> structure and authority: e.g. glowing gavel-like light
       beams, a sealed/locking mechanism, official document motifs rendered abstractly
   Always concrete and specific to THIS story's number/place/scale - never generic
-  "digital finance" stock imagery. No real people. No text in the image.
+  "digital finance" stock imagery. No text in the image.
 
 Return ONLY JSON (no markdown, no extra text):
 {{
@@ -341,7 +352,7 @@ Return ONLY JSON (no markdown, no extra text):
  "highlight": "the exact phrase from the chosen headline to put in accent color",
  "thumbnail_text": "the bold words to put ON the cover image",
  "caption": "3-5 sentence plain-language explanation per the CAPTION RULE above",
- "visual_type": "real_photo" | "ai_generated",
+ "visual_type": "real_photo" | "ai_illustrative" | "ai_generated",
  "visual_direction": "one clear sentence describing the image concept",
  "formats": {{"tiktok": "one-line tip", "instagram": "...", "threads": "...", "x": "..."}},
  "hashtags": {{"tiktok": ["5-7 tags"], "instagram": ["..."], "threads": ["..."], "x": ["..."]}}
@@ -374,6 +385,18 @@ def format_pack(p, news_title=""):
     label = "📷 <b>Use a REAL photo:</b>" if vtype == "real_photo" else "🎨 <b>Visual:</b>"
     visual_block = f"{label} {esc(p.get('visual_direction', ''))}"
 
+    # Full copyable prompt (same one Colton uses automatically) - so you can also
+    # paste it into ChatGPT/Midjourney/Magnific yourself if you want manual control
+    # or a different result. Not shown for real_photo since that needs an actual photo.
+    prompt_block = ""
+    if vtype != "real_photo":
+        subject = p.get("visual_direction", "")
+        full_prompt = f"{subject}. {BRAND_STYLE}"
+        prompt_block = (
+            f"\n🖨️ <b>Copy-paste prompt (for ChatGPT/Midjourney/Magnific etc):</b>\n"
+            f"<code>{esc(full_prompt)}</code>\n"
+        )
+
     return (
         f"✍️ <b>JAYDEN CONTENT PACK</b>\n"
         f"📰 <b>News:</b> {esc(news_title)}\n\n"
@@ -382,7 +405,8 @@ def format_pack(p, news_title=""):
         f"📄 <b>Next slides:</b>\n{slides}\n\n"
         f"✨ <b>Highlight line:</b> {esc(p.get('highlight', ''))}\n"
         f"🖼️ <b>Thumbnail text:</b> {esc(p.get('thumbnail_text', ''))}\n\n"
-        f"{visual_block}\n\n"
+        f"{visual_block}\n"
+        f"{prompt_block}\n"
         f"📝 <b>Caption:</b>\n{esc(p.get('caption', ''))}\n\n"
         f"📐 <b>Format per platform:</b>\n{fmt_lines}\n\n"
         f"#️⃣ <b>Hashtags:</b>\n{tag_lines}"
@@ -398,9 +422,17 @@ NEGATIVE_PROMPT = (
     "blurry, low quality, low detail, distorted, deformed, mutated, extra limbs, "
     "grainy, pixelated, jpeg artifacts, oversaturated, ugly, amateur"
 )
+# Used for the "ai_illustrative" case: generic anonymous people ARE allowed (no
+# specific real face is being replicated), just no fantasy/game-character drift.
+NEGATIVE_PROMPT_ALLOW_PEOPLE = (
+    "text, letters, words, watermark, logo, signature, caption, title, writing, "
+    "fantasy character, video game character, anime character, armor, wings, "
+    "blurry, low quality, low detail, distorted, deformed, mutated, extra limbs, "
+    "grainy, pixelated, jpeg artifacts, oversaturated, ugly, amateur"
+)
 
 
-def generate_image(visual_direction, news_title):
+def generate_image(visual_direction, news_title, allow_generic_people=False):
     """Uses Pollinations.ai (free, no API key, no card needed) - just a URL hit.
     model=flux-realism gives rich detail/lighting. enhance=OFF because it lets an
     LLM rewrite the prompt and was drifting the concept off-topic (e.g. into fantasy
@@ -410,9 +442,10 @@ def generate_image(visual_direction, news_title):
     subject = visual_direction or news_title
     prompt = f"{subject}. {BRAND_STYLE}"
     seed = random.randint(1, 999999)  # avoids getting a cached/repeated image
+    negative = NEGATIVE_PROMPT_ALLOW_PEOPLE if allow_generic_people else NEGATIVE_PROMPT
     url = (f"https://image.pollinations.ai/prompt/{quote(prompt[:800])}"
            f"?width=1536&height=1920&model=flux-realism&nologo=true&seed={seed}"
-           f"&negative={quote(NEGATIVE_PROMPT)}")
+           f"&negative={quote(negative)}")
     try:
         r = requests.get(url, timeout=120)
         if r.status_code != 200 or len(r.content) < 1000:
@@ -424,7 +457,7 @@ def generate_image(visual_direction, news_title):
         return None
 
 
-def compose_final_post(bg_bytes, headline, highlight_phrase, source_name=""):
+def compose_final_post(bg_bytes, headline, highlight_phrase, source_name="", ai_disclosure=False):
     """Composites Colton's background + Jayden's headline into a finished,
     ready-to-post 1080x1350 image with logo, gradient, and text baked in."""
     from PIL import Image, ImageDraw, ImageFont
@@ -527,7 +560,10 @@ def compose_final_post(bg_bytes, headline, highlight_phrase, source_name=""):
         y_text += 70
 
     if source_name:
-        draw.text((50, H - 55), f"Sumber: {source_name}", font=src_font, fill=(160, 160, 160))
+        credit = f"Sumber: AI Generated" if ai_disclosure else f"Sumber: {source_name}"
+        draw.text((50, H - 55), credit, font=src_font, fill=(160, 160, 160))
+    elif ai_disclosure:
+        draw.text((50, H - 55), "Sumber: AI Generated", font=src_font, fill=(160, 160, 160))
 
     out = io.BytesIO()
     bg.save(out, format="PNG")
@@ -617,14 +653,16 @@ def run_pack_pipeline(item, extra_context="", label="story"):
 
     try:
         log(f"Colton: generating background for {label}...")
-        img_url = generate_image(pack.get("visual_direction", ""), item["title"])
+        vtype = pack.get("visual_type", "ai_generated")
+        img_url = generate_image(pack.get("visual_direction", ""), item["title"],
+                                  allow_generic_people=(vtype == "ai_illustrative"))
         if not img_url:
             log("Colton: no image produced.")
             return True
 
-        if pack.get("visual_type") == "real_photo":
-            note = ("🖼️ <b>Colton background</b> (this story has a real person - "
-                    "add their real photo yourself, this is a supporting element)")
+        if vtype == "real_photo":
+            note = ("🖼️ <b>Colton background</b> (this story has a real, recognizable "
+                    "person - add their real photo yourself, this is a supporting element)")
             send_telegram_photo(img_url, note, JAYDEN_BOT_TOKEN)
             return True
 
@@ -633,7 +671,8 @@ def run_pack_pipeline(item, extra_context="", label="story"):
         headline = hooks[0] if hooks else pack.get("thumbnail_text", "")
         final_png = compose_final_post(bg_bytes, headline=headline,
                                        highlight_phrase=pack.get("highlight", ""),
-                                       source_name=item.get("source", ""))
+                                       source_name=item.get("source", ""),
+                                       ai_disclosure=(vtype == "ai_illustrative"))
         cap = f"✅ Ready to post.\n📝 {html.escape(pack.get('caption', '')[:600])}"
         send_telegram_photo_bytes(final_png, cap, JAYDEN_BOT_TOKEN)
         return True
