@@ -2,4 +2,3 @@ requests
 feedparser
 anthropic
 python-dotenv
-Pillow
