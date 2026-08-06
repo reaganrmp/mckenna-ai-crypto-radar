@@ -1,23 +1,30 @@
 """
-AI + Crypto Content Radar
--------------------------
-This is your MEDIA tool (different job from the trading radar).
-Every time it runs it:
-  1. Pulls the newest AI + crypto news, plus regulation/law news from
-     Indonesia, the US, and China (in Indonesian, English, and Chinese)
-  2. Keeps only what's new in the last few minutes
-  3. Asks Claude: "Is this worth posting about? For which market? What's the angle?"
-  4. Sends the post-worthy ones to your Telegram so you can review + write
+McKenna + Jayden + Colton - AI/Crypto Content Radar
+----------------------------------------------------
+McKenna : finds fresh AI/crypto/regulation news (ID + international) and alerts you.
+Jayden  : for the highest-priority stories, writes a ready-to-post content pack
+          (hooks, slides, caption, formats, hashtags).
+Colton  : generates an on-brand background image and composites the FINISHED,
+          ready-to-post image (headline + teal highlight + your logo baked in).
 
-You do NOT need to edit any code to run it. The only things you might tweak
-later are the CONFIG lists (feeds + search queries) near the top.
+ON-DEMAND COMMAND (new):
+  Message McKenna's bot with:      regen: <paste the headline or story text>
+  On the next run (within ~30 min, or trigger the workflow manually for instant),
+  you'll get a fresh Jayden pack + Colton image for exactly that story - even if
+  it's old news, got missed, or errored the first time. No code, no waiting on
+  auto-detection.
+
+You do NOT need to edit any code to run this. Tweak the CONFIG block if you want
+to change check frequency, sources, or the pack cap.
 """
 
 import os
 import sys
+import io
 import json
 import time
 import html
+import textwrap
 from urllib.parse import quote
 from datetime import datetime, timezone, timedelta
 
@@ -30,36 +37,31 @@ except Exception:
     pass
 
 # ------------------------- CONFIG (safe to tweak later) -------------------------
-LOOKBACK_MINUTES = 20         # treat news from the last N minutes as "new"
-MAX_ITEMS_PER_RUN = 20        # safety cap so a news burst can't spike your bill
-CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+LOOKBACK_MINUTES = 20          # treat news from the last N minutes as "new"
+MAX_ITEMS_PER_RUN = 20         # safety cap so a news burst can't spike your bill
+MAX_PACKS_PER_RUN = 4          # cap on Jayden/Colton (slow+costly) per run
+CLAUDE_MODEL = "claude-haiku-4-5-20251001"     # McKenna's cheap news filter
+JAYDEN_MODEL = "claude-sonnet-5"               # better copywriting for packs
+TOGETHER_IMAGE_MODEL = "black-forest-labs/FLUX.1-schnell-Free"  # swap to non-Free if you go paid
 
-# FAST feeds: fresh crypto + AI news from outlets directly (no signup needed).
 RSS_FEEDS = [
-    # --- Crypto ---
     "https://cointelegraph.com/rss",
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "https://decrypt.co/feed",
-    # --- AI ---
     "https://techcrunch.com/category/artificial-intelligence/feed/",
     "https://venturebeat.com/category/ai/feed/",
     "https://the-decoder.com/feed/",
     "https://www.theverge.com/rss/index.xml",
 ]
 
-# REGULATION / MULTI-MARKET net via Google News search feeds.
-# Each entry = (search query, language code, country code). Add/remove freely.
-# "when:6h" makes Google return only the last ~6 hours, so it stays fresh.
 GOOGLE_NEWS = [
-    # --- International / US (English) ---
     ("cryptocurrency regulation SEC when:6h", "en-US", "US"),
     ("artificial intelligence regulation law when:6h", "en-US", "US"),
-    # --- Indonesia (Indonesian) ---
     ("regulasi kripto OR pajak kripto Indonesia when:6h", "id", "ID"),
     ("aturan kecerdasan buatan Indonesia when:6h", "id", "ID"),
     ("Indodax OR Tokocrypto OR Pintu when:6h", "id", "ID"),
     ("Bappebti OR OJK kripto when:6h", "id", "ID"),
-    # --- China (Chinese) --- PAUSED for now, uncomment when ready ---
+    # China paused - uncomment when ready
     # ("加密货币 政策 监管 when:6h", "zh-CN", "CN"),
     # ("人工智能 监管 法规 when:6h", "zh-CN", "CN"),
 ]
@@ -70,19 +72,29 @@ TEST_MODE = os.environ.get("TEST_MODE") == "1"
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-CRYPTOPANIC_TOKEN = os.environ.get("CRYPTOPANIC_TOKEN")  # optional
-JAYDEN_BOT_TOKEN = os.environ.get("JAYDEN_BOT_TOKEN")     # optional - enables content packs
+CRYPTOPANIC_TOKEN = os.environ.get("CRYPTOPANIC_TOKEN")    # optional
+JAYDEN_BOT_TOKEN = os.environ.get("JAYDEN_BOT_TOKEN")      # optional - enables content packs
 TOGETHER_API_KEY = os.environ.get("TOGETHER_API_KEY")      # optional - enables Colton image generation
-TOGETHER_IMAGE_MODEL = "black-forest-labs/FLUX.1-schnell-Free"  # swap to FLUX.1-schnell if you go paid
-JAYDEN_MODEL = "claude-sonnet-5"   # better copywriting than Haiku, worth it for the few high alerts
 
 FLAGS = {"ID": "🇮🇩", "US": "🇺🇸", "CN": "🇨🇳", "Global": "🌐"}
+VIRALITY_DOT = {"high": "🟢🟢🟢", "medium": "🟢🟢⚪", "low": "🟢⚪⚪"}
+BRAND_STYLE = (
+    "cinematic editorial tech-news key art, near-black background, "
+    "deep teal (#367588) rim lighting and atmospheric glow as the dominant accent, "
+    "subtle warm amber highlight as secondary accent, high contrast, deep shadows, "
+    "dramatic single-source lighting, glossy premium finish, "
+    "strong empty negative space in the lower third for headline text, "
+    "photorealistic, ultra-detailed, 8k, shallow depth of field, "
+    "no text, no letters, no words, no watermark, no logos, no human faces"
+)
 
 
 def log(msg):
     stamp = datetime.now(timezone.utc).strftime("%H:%M:%S")
     print(f"[{stamp}] {msg}", flush=True)
 
+
+# ============================== NEWS GATHERING ==================================
 
 def parse_iso(s):
     if not s:
@@ -121,8 +133,7 @@ def fetch_cryptopanic():
                 link = post.get("url") or post.get("original_url") or ""
                 dt = parse_iso(post.get("published_at") or post.get("created_at"))
                 if title and dt:
-                    items.append({"title": title, "url": link,
-                                  "source": "CryptoPanic", "dt": dt})
+                    items.append({"title": title, "url": link, "source": "CryptoPanic", "dt": dt})
             if items:
                 break
         except Exception as e:
@@ -139,7 +150,6 @@ def _feed_entries(feed_url, source_fallback):
         for e in parsed.entries[:40]:
             title = (e.get("title") or "").strip()
             link = e.get("link", "")
-            # Google News tags the real publisher inside entry.source
             src = feed_title
             if isinstance(e.get("source"), dict) and e["source"].get("title"):
                 src = e["source"]["title"]
@@ -186,27 +196,29 @@ def gather_candidates():
     return fresh[:MAX_ITEMS_PER_RUN]
 
 
+# ============================== MCKENNA (ANALYSIS) ==============================
+
 def analyze(items):
     from anthropic import Anthropic
     client = Anthropic(api_key=ANTHROPIC_API_KEY)
+
     headlines = "\n".join(
-        f'{i + 1}. "{it["title"]}" (source: {it["source"]})'
-        for i, it in enumerate(items)
+        f'{i + 1}. "{it["title"]}" (source: {it["source"]})' for i, it in enumerate(items)
     )
 
     prompt = f"""You are a news radar for a crypto + AI media brand posting to a young
 Indonesian audience (market code "ID") and an international English audience
-(market code "US"/"Global"). China is paused for now — never tag "CN".
+(market code "US"/"Global"). China is paused for now - never tag "CN".
 
 For EACH headline, apply this STAKES TEST, not just topic relevance:
-Would a young crypto/AI-interested person feel real FOMO, worry, or curiosity —
+Would a young crypto/AI-interested person feel real FOMO, worry, or curiosity -
 not just "huh, technically related"? Ask: does this change what someone can/can't
 do tomorrow, affect their money, their platform access, or expose a scam?
 
 Include ONLY headlines that pass the stakes test AND are one of:
 - fast-rising / breaking / high-interest AI or crypto news
 - a government/regulatory/legal action affecting AI or crypto (especially
-  Indonesia or the US) — new tax, exchange bans, AI laws, export blocks
+  Indonesia or the US) - new tax, exchange bans, AI laws, export blocks
 - a scam, rug-pull, hack, or exploit exposure (protects and builds trust with audience)
 
 EXCLUDE: price predictions, generic opinion pieces, low-effort clickbait,
@@ -230,12 +242,8 @@ If none qualify, return []
 Headlines:
 {headlines}
 """
-
-    resp = client.messages.create(
-        model=CLAUDE_MODEL,
-        max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    resp = client.messages.create(model=CLAUDE_MODEL, max_tokens=2000,
+                                   messages=[{"role": "user", "content": prompt}])
     text = "".join(b.text for b in resp.content if b.type == "text").strip()
     start, end = text.find("["), text.rfind("]")
     if start != -1 and end != -1:
@@ -247,13 +255,9 @@ Headlines:
         return []
 
 
-VIRALITY_DOT = {"high": "🟢🟢🟢", "medium": "🟢🟢⚪", "low": "🟢⚪⚪"}
-
-
 def format_message(item, a):
     cat = str(a.get("category", "")).lower()
-    badge = ("⚖️" if cat == "regulation" else
-             "🔥" if cat == "breaking" else
+    badge = ("⚖️" if cat == "regulation" else "🔥" if cat == "breaking" else
              "🚨" if cat == "scam_alert" else "📰")
     topic = str(a.get("topic", "")).lower()
     topic_emoji = "🪙🤖" if topic == "both" else "🤖" if topic == "ai" else "🪙"
@@ -266,38 +270,28 @@ def format_message(item, a):
         f"📝 {esc(a.get('summary', ''))}\n\n"
         f"💡 <b>Why they care:</b> {esc(a.get('why', ''))}\n"
         f"🎬 <b>Angle:</b> {esc(a.get('angle', ''))}\n\n"
-        f"🔗 <a href=\"{item['url']}\">Source</a>  ·  <i>{esc(item['source'])}</i>"
+        f"🔗 <a href=\"{item['url']}\">Source</a>  ·  <i>{esc(item['source'])}</i>\n\n"
+        f"<i>Want a redo? Message me: regen: {esc(item['title'][:80])}</i>"
     )
 
 
-def send_telegram(text, token=None):
-    token = token or TELEGRAM_BOT_TOKEN
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": text,
-               "parse_mode": "HTML", "disable_web_page_preview": False}
-    try:
-        r = requests.post(url, json=payload, timeout=20)
-        if r.status_code != 200:
-            log(f"Telegram error {r.status_code}: {r.text[:200]}")
-        return r.status_code == 200
-    except Exception as e:
-        log(f"Telegram send failed: {e}")
-        return False
+# ============================== JAYDEN (CONTENT PACK) ============================
 
-
-def generate_pack(item, a):
-    """Jayden: turns a high-priority alert into a ready-to-post content pack."""
+def generate_pack(item, extra_context=""):
+    """Turns a headline (+ optional summary/context) into a ready-to-post pack."""
     from anthropic import Anthropic
     client = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-    lang = "Indonesian" if "ID" in a.get("markets", []) else "English"
-    news_text = f"{item['title']}\n\nSummary: {a.get('summary', '')}"
+    markets = item.get("markets", [])
+    lang = "Indonesian" if "ID" in markets else "English"
+    news_text = item["title"]
+    if extra_context:
+        news_text += f"\n\nContext: {extra_context}"
 
     prompt = f"""You are Jayden, a social content planner for a crypto + AI media brand
 (TikTok, Instagram, Threads, X). Turn this news into a ready-to-post pack in the style
-of top Indonesian crypto media (dark dramatic real photo + bold headline + one highlighted
-phrase, minimal text, no over-explaining).
-Write in {lang}.
+of top Indonesian crypto media (dark dramatic image + bold headline + one highlighted
+phrase, minimal text, no over-explaining). Write in {lang}.
 
 Rules:
 - ONE slide 1 headline, punchy, confident, not corporate. Mark the single most
@@ -345,171 +339,13 @@ Return ONLY JSON (no markdown, no extra text):
 News:
 {news_text}
 """
-    resp = client.messages.create(
-        model=JAYDEN_MODEL, max_tokens=2000,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    resp = client.messages.create(model=JAYDEN_MODEL, max_tokens=2000,
+                                   messages=[{"role": "user", "content": prompt}])
     text = "".join(b.text for b in resp.content if b.type == "text").strip()
     s, e = text.find("{"), text.rfind("}")
     if s != -1 and e != -1:
         text = text[s:e + 1]
     return json.loads(text)
-
-
-# ============================ COLTON - IMAGE GENERATOR ============================
-# Takes Jayden's visual_direction and produces an on-brand image, then sends it
-# to Telegram. Uses FLUX Schnell (very cheap / free tier available on Together AI).
-
-# Your brand look, applied to EVERY image so the feed stays consistent.
-BRAND_STYLE = (
-    "cinematic editorial tech-news key art, near-black background, "
-    "deep teal (#367588) rim lighting and atmospheric glow as the dominant accent, "
-    "subtle warm amber highlight as secondary accent, high contrast, deep shadows, "
-    "dramatic single-source lighting, glossy premium finish, "
-    "strong empty negative space in the lower third for headline text, "
-    "photorealistic, ultra-detailed, 8k, shallow depth of field, "
-    "no text, no letters, no words, no watermark, no logos, no human faces"
-)
-
-
-def generate_image(visual_direction, news_title):
-    """Build a full branded prompt and generate the image. Returns an image URL."""
-    if not TOGETHER_API_KEY:
-        return None
-
-    subject = visual_direction or news_title
-    prompt = f"{subject}. {BRAND_STYLE}"
-
-    try:
-        r = requests.post(
-            "https://api.together.xyz/v1/images/generations",
-            headers={"Authorization": f"Bearer {TOGETHER_API_KEY}",
-                     "Content-Type": "application/json"},
-            json={
-                "model": TOGETHER_IMAGE_MODEL,
-                "prompt": prompt[:1000],
-                "width": 1024,
-                "height": 1280,        # portrait, matches IG/TikTok
-                "steps": 4,
-                "n": 1,
-            },
-            timeout=90,
-        )
-        if r.status_code != 200:
-            log(f"Together error {r.status_code}: {r.text[:200]}")
-            return None
-        data = r.json().get("data", [])
-        return data[0].get("url") if data else None
-    except Exception as e:
-        log(f"Image generation failed: {e}")
-        return None
-
-
-def compose_final_post(bg_bytes, headline, highlight_phrase, source_name=""):
-    """Takes Colton's raw background + Jayden's text, returns a finished,
-    ready-to-post 1080x1350 image (bytes) with logo, gradient, and headline
-    baked in. This is the whole point - no manual Canva step needed."""
-    from PIL import Image, ImageDraw, ImageFont
-    import io, textwrap
-
-    W, H = 1080, 1350
-    TEAL = (54, 117, 136)          # brand accent #367588
-    FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
-
-    bg = Image.open(io.BytesIO(bg_bytes)).convert("RGB")
-    # cover-crop to exactly W x H
-    src_ratio, tgt_ratio = bg.width / bg.height, W / H
-    if src_ratio > tgt_ratio:
-        new_w = int(bg.height * tgt_ratio)
-        bg = bg.crop(((bg.width - new_w) // 2, 0, (bg.width + new_w) // 2, bg.height))
-    else:
-        new_h = int(bg.width / tgt_ratio)
-        bg = bg.crop((0, (bg.height - new_h) // 2, bg.width, (bg.height + new_h) // 2))
-    bg = bg.resize((W, H))
-
-    # dark gradient over the bottom ~55% so text stays readable
-    grad = Image.new("L", (1, H), 0)
-    for y in range(H):
-        if y > H * 0.40:
-            t = (y - H * 0.40) / (H * 0.60)
-            grad.putpixel((0, y), int(240 * t))
-    grad = grad.resize((W, H))
-    black = Image.new("RGB", (W, H), (5, 5, 5))
-    bg = Image.composite(black, bg, grad)
-
-    draw = ImageDraw.Draw(bg)
-    logo_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Bold.ttf", 38)
-    head_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Bold.ttf", 62)
-    src_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Regular.ttf", 24)
-
-    # logo, top-left (falls back to text wordmark if the logo file is missing)
-    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
-    if os.path.exists(logo_path):
-        logo = Image.open(logo_path).convert("RGBA")
-        target_h = 110
-        scale = target_h / logo.height
-        logo = logo.resize((int(logo.width * scale), target_h))
-        bg.paste(logo, (50, 45), logo)
-    else:
-        draw.text((50, 50), "CRYPTOSPARK", font=logo_font, fill=(255, 255, 255))
-        draw.rectangle([50, 95, 58, 103], fill=TEAL)
-
-    # headline, wrapped, highlight phrase colored teal
-    wrapped = textwrap.wrap(headline, width=19)
-    y_text = H - 220 - (len(wrapped) * 70)
-    for line in wrapped:
-        x = 50
-        if highlight_phrase and highlight_phrase in line:
-            pre, _, post = line.partition(highlight_phrase)
-            draw.text((x, y_text), pre, font=head_font, fill=(255, 255, 255))
-            pre_w = draw.textlength(pre, font=head_font)
-            draw.text((x + pre_w, y_text), highlight_phrase, font=head_font, fill=TEAL)
-            hi_w = draw.textlength(highlight_phrase, font=head_font)
-            draw.text((x + pre_w + hi_w, y_text), post, font=head_font, fill=(255, 255, 255))
-        else:
-            draw.text((x, y_text), line, font=head_font, fill=(255, 255, 255))
-        y_text += 70
-
-    if source_name:
-        draw.text((50, H - 55), f"Sumber: {source_name}", font=src_font, fill=(160, 160, 160))
-
-    out = io.BytesIO()
-    bg.save(out, format="PNG")
-    return out.getvalue()
-
-
-def send_telegram_photo(image_url, caption, token):
-    """Send a generated image into Telegram with a short caption."""
-    url = f"https://api.telegram.org/bot{token}/sendPhoto"
-    try:
-        r = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "photo": image_url,
-                                     "caption": caption[:1000], "parse_mode": "HTML"},
-                          timeout=60)
-        if r.status_code != 200:
-            log(f"Telegram photo error {r.status_code}: {r.text[:200]}")
-        return r.status_code == 200
-    except Exception as e:
-        log(f"Telegram photo send failed: {e}")
-        return False
-
-
-def send_telegram_photo_bytes(image_bytes, caption, token):
-    """Send a locally-composited image (raw bytes) as the finished post."""
-    url = f"https://api.telegram.org/bot{token}/sendPhoto"
-    try:
-        r = requests.post(
-            url,
-            data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption[:1000], "parse_mode": "HTML"},
-            files={"photo": ("post.png", image_bytes, "image/png")},
-            timeout=60,
-        )
-        if r.status_code != 200:
-            log(f"Telegram photo(bytes) error {r.status_code}: {r.text[:200]}")
-        return r.status_code == 200
-    except Exception as e:
-        log(f"Telegram photo(bytes) send failed: {e}")
-        return False
-# ================================================================================
 
 
 def format_pack(p, news_title=""):
@@ -542,6 +378,250 @@ def format_pack(p, news_title=""):
     )
 
 
+# ============================== COLTON (IMAGE) ===================================
+
+def generate_image(visual_direction, news_title):
+    if not TOGETHER_API_KEY:
+        return None
+    subject = visual_direction or news_title
+    prompt = f"{subject}. {BRAND_STYLE}"
+    try:
+        r = requests.post(
+            "https://api.together.xyz/v1/images/generations",
+            headers={"Authorization": f"Bearer {TOGETHER_API_KEY}", "Content-Type": "application/json"},
+            json={"model": TOGETHER_IMAGE_MODEL, "prompt": prompt[:1000],
+                  "width": 1024, "height": 1280, "steps": 4, "n": 1},
+            timeout=90,
+        )
+        if r.status_code != 200:
+            log(f"Together error {r.status_code}: {r.text[:200]}")
+            return None
+        data = r.json().get("data", [])
+        return data[0].get("url") if data else None
+    except Exception as e:
+        log(f"Image generation failed: {e}")
+        return None
+
+
+def compose_final_post(bg_bytes, headline, highlight_phrase, source_name=""):
+    """Composites Colton's background + Jayden's headline into a finished,
+    ready-to-post 1080x1350 image with logo, gradient, and text baked in."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    W, H = 1080, 1350
+    TEAL = (54, 117, 136)
+    FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+
+    bg = Image.open(io.BytesIO(bg_bytes)).convert("RGB")
+    src_ratio, tgt_ratio = bg.width / bg.height, W / H
+    if src_ratio > tgt_ratio:
+        new_w = int(bg.height * tgt_ratio)
+        bg = bg.crop(((bg.width - new_w) // 2, 0, (bg.width + new_w) // 2, bg.height))
+    else:
+        new_h = int(bg.width / tgt_ratio)
+        bg = bg.crop((0, (bg.height - new_h) // 2, bg.width, (bg.height + new_h) // 2))
+    bg = bg.resize((W, H))
+
+    grad = Image.new("L", (1, H), 0)
+    for y in range(H):
+        if y > H * 0.40:
+            t = (y - H * 0.40) / (H * 0.60)
+            grad.putpixel((0, y), int(240 * t))
+    grad = grad.resize((W, H))
+    black = Image.new("RGB", (W, H), (5, 5, 5))
+    bg = Image.composite(black, bg, grad)
+
+    draw = ImageDraw.Draw(bg)
+    logo_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Bold.ttf", 38)
+    head_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Bold.ttf", 62)
+    src_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Regular.ttf", 24)
+
+    logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
+    if os.path.exists(logo_path):
+        logo = Image.open(logo_path).convert("RGBA")
+        target_h = 110
+        scale = target_h / logo.height
+        logo = logo.resize((int(logo.width * scale), target_h))
+        bg.paste(logo, (50, 45), logo)
+    else:
+        draw.text((50, 50), "CRYPTOSPARK", font=logo_font, fill=(255, 255, 255))
+        draw.rectangle([50, 95, 58, 103], fill=TEAL)
+
+    wrapped = textwrap.wrap(headline, width=19)
+    y_text = H - 220 - (len(wrapped) * 70)
+    for line in wrapped:
+        x = 50
+        if highlight_phrase and highlight_phrase in line:
+            pre, _, post = line.partition(highlight_phrase)
+            draw.text((x, y_text), pre, font=head_font, fill=(255, 255, 255))
+            pre_w = draw.textlength(pre, font=head_font)
+            draw.text((x + pre_w, y_text), highlight_phrase, font=head_font, fill=TEAL)
+            hi_w = draw.textlength(highlight_phrase, font=head_font)
+            draw.text((x + pre_w + hi_w, y_text), post, font=head_font, fill=(255, 255, 255))
+        else:
+            draw.text((x, y_text), line, font=head_font, fill=(255, 255, 255))
+        y_text += 70
+
+    if source_name:
+        draw.text((50, H - 55), f"Sumber: {source_name}", font=src_font, fill=(160, 160, 160))
+
+    out = io.BytesIO()
+    bg.save(out, format="PNG")
+    return out.getvalue()
+
+
+# ============================== TELEGRAM HELPERS =================================
+
+def send_telegram(text, token=None):
+    token = token or TELEGRAM_BOT_TOKEN
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        r = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": text,
+                                     "parse_mode": "HTML", "disable_web_page_preview": False},
+                          timeout=20)
+        if r.status_code != 200:
+            log(f"Telegram error {r.status_code}: {r.text[:200]}")
+        return r.status_code == 200
+    except Exception as e:
+        log(f"Telegram send failed: {e}")
+        return False
+
+
+def send_telegram_photo(image_url, caption, token):
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    try:
+        r = requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "photo": image_url,
+                                     "caption": caption[:1000], "parse_mode": "HTML"}, timeout=60)
+        if r.status_code != 200:
+            log(f"Telegram photo error {r.status_code}: {r.text[:200]}")
+        return r.status_code == 200
+    except Exception as e:
+        log(f"Telegram photo send failed: {e}")
+        return False
+
+
+def send_telegram_photo_bytes(image_bytes, caption, token):
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    try:
+        r = requests.post(url,
+                          data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption[:1000], "parse_mode": "HTML"},
+                          files={"photo": ("post.png", image_bytes, "image/png")}, timeout=60)
+        if r.status_code != 200:
+            log(f"Telegram photo(bytes) error {r.status_code}: {r.text[:200]}")
+        return r.status_code == 200
+    except Exception as e:
+        log(f"Telegram photo(bytes) send failed: {e}")
+        return False
+
+
+def get_updates(token):
+    try:
+        r = requests.get(f"https://api.telegram.org/bot{token}/getUpdates?timeout=0", timeout=25)
+        return r.json().get("result", [])
+    except Exception as e:
+        log(f"getUpdates error: {e}")
+        return []
+
+
+def clear_updates(token, offset):
+    try:
+        requests.get(f"https://api.telegram.org/bot{token}/getUpdates?offset={offset}&timeout=0", timeout=25)
+    except Exception as e:
+        log(f"clear_updates error: {e}")
+
+
+# ============================== PACK + IMAGE PIPELINE =============================
+
+def run_pack_pipeline(item, extra_context="", label="story"):
+    """Shared by both the auto high-priority path and the manual 'regen:' command.
+    Generates a Jayden pack, sends it, then generates + composites + sends Colton's image."""
+    if not JAYDEN_BOT_TOKEN:
+        log("No JAYDEN_BOT_TOKEN set - skipping pack generation.")
+        return False
+    try:
+        log(f"Generating pack for {label}: {item['title'][:60]}...")
+        pack = generate_pack(item, extra_context)
+        send_telegram(format_pack(pack, item["title"]), token=JAYDEN_BOT_TOKEN)
+        time.sleep(1)
+    except Exception as ex:
+        log(f"Pack generation failed for {label}: {ex}")
+        send_telegram(f"⚠️ Jayden hit a snag on: {html.escape(item['title'][:100])}\n({ex})",
+                      token=JAYDEN_BOT_TOKEN)
+        return False
+
+    if not TOGETHER_API_KEY:
+        return True
+
+    try:
+        log(f"Colton: generating background for {label}...")
+        img_url = generate_image(pack.get("visual_direction", ""), item["title"])
+        if not img_url:
+            log("Colton: no image produced.")
+            return True
+
+        if pack.get("visual_type") == "real_photo":
+            note = ("🖼️ <b>Colton background</b> (this story has a real person - "
+                    "add their real photo yourself, this is a supporting element)")
+            send_telegram_photo(img_url, note, JAYDEN_BOT_TOKEN)
+            return True
+
+        bg_bytes = requests.get(img_url, timeout=30).content
+        hooks = pack.get("hooks", [])
+        headline = hooks[0] if hooks else pack.get("thumbnail_text", "")
+        final_png = compose_final_post(bg_bytes, headline=headline,
+                                       highlight_phrase=pack.get("highlight", ""),
+                                       source_name=item.get("source", ""))
+        cap = f"✅ Ready to post.\n📝 {html.escape(pack.get('caption', '')[:600])}"
+        send_telegram_photo_bytes(final_png, cap, JAYDEN_BOT_TOKEN)
+        return True
+    except Exception as ex:
+        log(f"Colton failed for {label}: {ex}")
+        send_telegram(f"⚠️ Colton hit a snag on: {html.escape(item['title'][:100])}\n({ex})",
+                      token=JAYDEN_BOT_TOKEN)
+        return False
+
+
+def handle_regen_commands():
+    """Checks McKenna's bot for 'regen: <text>' messages from you and (re)generates
+    a full Jayden pack + Colton image for that exact text, on demand."""
+    if not TELEGRAM_BOT_TOKEN:
+        return
+    updates = get_updates(TELEGRAM_BOT_TOKEN)
+    if not updates:
+        return
+
+    max_id = max(u["update_id"] for u in updates)
+    handled = 0
+
+    for u in updates:
+        msg = u.get("message")
+        if not msg:
+            continue
+        chat_id = str(msg.get("chat", {}).get("id", ""))
+        text = (msg.get("text") or "").strip()
+        if chat_id != str(TELEGRAM_CHAT_ID):
+            continue
+        if not text.lower().startswith("regen:"):
+            continue
+
+        story_text = text.split(":", 1)[1].strip()
+        if not story_text:
+            continue
+
+        log(f"Manual regen requested: {story_text[:60]}")
+        send_telegram(f"🔄 Regenerating pack for: {html.escape(story_text[:100])}", token=TELEGRAM_BOT_TOKEN)
+        fake_item = {"title": story_text, "url": "", "source": "manual request", "markets": ["ID", "Global"]}
+        run_pack_pipeline(fake_item, label="manual regen")
+        handled += 1
+        time.sleep(1)
+
+    clear_updates(TELEGRAM_BOT_TOKEN, max_id + 1)
+    if handled:
+        log(f"Handled {handled} manual regen request(s).")
+
+
+# ============================== MAIN =============================================
+
 def main():
     missing = [k for k in ("ANTHROPIC_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID")
                if not os.environ.get(k)]
@@ -549,6 +629,11 @@ def main():
         log("Missing required secrets: " + ", ".join(missing))
         sys.exit(1)
 
+    # 1) Handle any manual "regen:" requests first - fast, and works even if
+    #    the news-fetch part below finds nothing new this run.
+    handle_regen_commands()
+
+    # 2) Normal automatic news scan
     log("Fetching AI + crypto + regulation news...")
     items = gather_candidates()
     log(f"{len(items)} fresh candidate headline(s).")
@@ -560,58 +645,30 @@ def main():
     results = analyze(items)
     log(f"Claude flagged {len(results)} post-worthy item(s).")
 
-    # Only send/act on HIGH virality alerts - keeps Telegram clean and cost low
     results = [a for a in results if str(a.get("virality_potential", "")).lower() == "high"]
     log(f"{len(results)} are HIGH priority - only these get sent.")
 
     sent = 0
+    packs_made = 0
     for a in results:
         n = a.get("n")
         if not isinstance(n, int) or n < 1 or n > len(items):
             continue
-        item = items[n - 1]
+        item = dict(items[n - 1])
+        item["markets"] = a.get("markets", [])
+
         if send_telegram(format_message(item, a)):
             sent += 1
             time.sleep(1)
 
-        # Auto-trigger Jayden for high-priority alerts only (keeps cost low)
-        if JAYDEN_BOT_TOKEN and str(a.get("virality_potential", "")).lower() == "high":
-            try:
-                log("High-priority alert -> generating Jayden content pack...")
-                pack = generate_pack(item, a)
-                send_telegram(format_pack(pack, item['title']), token=JAYDEN_BOT_TOKEN)
-                time.sleep(1)
+        if packs_made >= MAX_PACKS_PER_RUN:
+            continue
 
-                # Colton: generate background, then composite the FINISHED ready-to-post image
-                if TOGETHER_API_KEY:
-                    log("Colton: generating background...")
-                    img_url = generate_image(pack.get("visual_direction", ""), item["title"])
-                    if img_url and pack.get("visual_type") != "real_photo":
-                        try:
-                            bg_bytes = requests.get(img_url, timeout=30).content
-                            hooks = pack.get("hooks", [])
-                            headline = hooks[0] if hooks else pack.get("thumbnail_text", "")
-                            final_png = compose_final_post(
-                                bg_bytes,
-                                headline=headline,
-                                highlight_phrase=pack.get("highlight", ""),
-                                source_name=item.get("source", ""),
-                            )
-                            cap = f"✅ Ready to post.\n📝 {html.escape(pack.get('caption','')[:600])}"
-                            send_telegram_photo_bytes(final_png, cap, JAYDEN_BOT_TOKEN)
-                            time.sleep(1)
-                        except Exception as ce:
-                            log(f"Colton: compositing failed, sending raw background instead: {ce}")
-                            send_telegram_photo(img_url, "🖼️ Background (compositing failed)", JAYDEN_BOT_TOKEN)
-                    elif img_url and pack.get("visual_type") == "real_photo":
-                        note = ("🖼️ <b>Colton background</b> (this story has a real person - "
-                                "add their real photo yourself, this is a supporting element)")
-                        send_telegram_photo(img_url, note, JAYDEN_BOT_TOKEN)
-                    else:
-                        log("Colton: no image produced this run.")
-            except Exception as ex:
-                log(f"Jayden pack generation failed: {ex}")
-    log(f"Sent {sent} alert(s). Done.")
+        if JAYDEN_BOT_TOKEN and str(a.get("virality_potential", "")).lower() == "high":
+            if run_pack_pipeline(item, extra_context=a.get("summary", ""), label="auto high-priority"):
+                packs_made += 1
+
+    log(f"Sent {sent} alert(s), generated {packs_made} pack(s). Done.")
 
 
 if __name__ == "__main__":
