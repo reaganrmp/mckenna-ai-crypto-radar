@@ -391,16 +391,28 @@ def format_pack(p, news_title=""):
 
 # ============================== COLTON (IMAGE) ===================================
 
+NEGATIVE_PROMPT = (
+    "person, people, human, man, woman, character, warrior, knight, anime character, "
+    "video game character, portrait, face, hands, fantasy character, creature, "
+    "text, letters, words, watermark, logo, signature, caption, title, writing, "
+    "blurry, low quality, low detail, distorted, deformed, mutated, extra limbs, "
+    "grainy, pixelated, jpeg artifacts, oversaturated, ugly, amateur"
+)
+
+
 def generate_image(visual_direction, news_title):
     """Uses Pollinations.ai (free, no API key, no card needed) - just a URL hit.
-    model=flux-realism gives much richer detail/lighting than plain flux, and
-    enhance=true auto-expands the prompt for extra detail before generating."""
+    model=flux-realism gives rich detail/lighting. enhance=OFF because it lets an
+    LLM rewrite the prompt and was drifting the concept off-topic (e.g. into fantasy
+    game characters). A real 'negative' param is used instead of just saying "no X"
+    in the positive prompt, which diffusion models routinely ignore."""
     import random
     subject = visual_direction or news_title
     prompt = f"{subject}. {BRAND_STYLE}"
     seed = random.randint(1, 999999)  # avoids getting a cached/repeated image
     url = (f"https://image.pollinations.ai/prompt/{quote(prompt[:800])}"
-           f"?width=1536&height=1920&model=flux-realism&enhance=true&nologo=true&seed={seed}")
+           f"?width=1536&height=1920&model=flux-realism&nologo=true&seed={seed}"
+           f"&negative={quote(NEGATIVE_PROMPT)}")
     try:
         r = requests.get(url, timeout=120)
         if r.status_code != 200 or len(r.content) < 1000:
@@ -442,7 +454,6 @@ def compose_final_post(bg_bytes, headline, highlight_phrase, source_name=""):
 
     draw = ImageDraw.Draw(bg)
     logo_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Bold.ttf", 38)
-    head_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Bold.ttf", 62)
     src_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Regular.ttf", 24)
 
     logo_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo.png")
@@ -457,15 +468,51 @@ def compose_final_post(bg_bytes, headline, highlight_phrase, source_name=""):
         draw.rectangle([50, 95, 58, 103], fill=TEAL)
 
     # Keep the highlight phrase together on one line (swap its spaces for a
-    # placeholder so textwrap can't break it apart), then restore before drawing.
+    # placeholder so wrapping can't break it apart), then restore before drawing.
     if highlight_phrase and highlight_phrase in headline:
         token = highlight_phrase.replace(" ", "\x00")
         headline_for_wrap = headline.replace(highlight_phrase, token)
     else:
         headline_for_wrap = headline
-    wrapped = textwrap.wrap(headline_for_wrap, width=19, break_long_words=False)
-    wrapped = [line.replace("\x00", " ") for line in wrapped]
-    y_text = H - 220 - (len(wrapped) * 70)
+
+    max_line_width = W - 100  # 50px margin each side
+
+    # Auto-shrink the font until every unbreakable chunk (words, and the
+    # highlight phrase) actually fits within the image - fixes overflow for
+    # long headlines/highlights instead of just guessing a fixed size.
+    font_size = 62
+    while font_size > 32:
+        test_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Bold.ttf", font_size)
+        widest_chunk = max(
+            draw.textlength(w.replace("\x00", " "), font=test_font)
+            for w in headline_for_wrap.split(" ")
+        )
+        if widest_chunk <= max_line_width:
+            break
+        font_size -= 4
+    else:
+        # Even the smallest size can't fit the highlight as one unbreakable chunk -
+        # give up protecting it and let it wrap normally, rather than overflow.
+        headline_for_wrap = headline_for_wrap.replace("\x00", " ")
+    head_font = ImageFont.truetype(f"{FONT_DIR}/Poppins-Bold.ttf", font_size)
+    line_height = int(font_size * 1.13)
+
+    # Real pixel-width wrapping (measures actual text, not a character-count guess)
+    words = headline_for_wrap.split(" ")
+    lines, current = [], ""
+    for word in words:
+        trial = f"{current} {word}".strip()
+        trial_measured = trial.replace("\x00", " ")  # measure with real spaces, not the placeholder
+        if draw.textlength(trial_measured, font=head_font) <= max_line_width or not current:
+            current = trial
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    wrapped = [line.replace("\x00", " ") for line in lines]
+
+    y_text = H - 220 - (len(wrapped) * line_height)
     for line in wrapped:
         x = 50
         if highlight_phrase and highlight_phrase in line:
