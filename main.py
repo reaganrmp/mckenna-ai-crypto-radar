@@ -347,7 +347,7 @@ Return ONLY JSON (no markdown, no extra text):
 News:
 {news_text}
 """
-    resp = client.messages.create(model=JAYDEN_MODEL, max_tokens=2000,
+    resp = client.messages.create(model=JAYDEN_MODEL, max_tokens=3500,
                                    messages=[{"role": "user", "content": prompt}])
     text = "".join(b.text for b in resp.content if b.type == "text").strip()
     s, e = text.find("{"), text.rfind("}")
@@ -360,7 +360,7 @@ News:
         # then retry once with a firmer instruction before giving up.
         log(f"Jayden JSON parse failed: {je}. Raw (first 300 chars): {text[:300]!r}")
         retry_prompt = prompt + "\n\nIMPORTANT: reply with ONLY the JSON object, nothing else - no caveats, no prose before or after."
-        resp2 = client.messages.create(model=JAYDEN_MODEL, max_tokens=2000,
+        resp2 = client.messages.create(model=JAYDEN_MODEL, max_tokens=3500,
                                        messages=[{"role": "user", "content": retry_prompt}])
         text2 = "".join(b.text for b in resp2.content if b.type == "text").strip()
         s2, e2 = text2.find("{"), text2.rfind("}")
