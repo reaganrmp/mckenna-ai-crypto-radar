@@ -5,6 +5,9 @@ on:
     - cron: "*/30 * * * *"     # runs every 30 minutes
   workflow_dispatch:            # adds a manual "Run workflow" button
 
+permissions:
+  contents: write              # needed so the workflow can commit the daily-count state file
+
 jobs:
   run:
     runs-on: ubuntu-latest
@@ -22,3 +25,14 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CRYPTOPANIC_TOKEN: ${{ secrets.CRYPTOPANIC_TOKEN }}
           JAYDEN_BOT_TOKEN: ${{ secrets.JAYDEN_BOT_TOKEN }}
+      - name: Save daily pack count (if changed)
+        run: |
+          if [ -n "$(git status --porcelain state/)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add state/
+            git commit -m "Update daily pack count [skip ci]"
+            git push
+          else
+            echo "No state changes to commit."
+          fi
