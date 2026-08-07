@@ -26,13 +26,16 @@ jobs:
           CRYPTOPANIC_TOKEN: ${{ secrets.CRYPTOPANIC_TOKEN }}
           JAYDEN_BOT_TOKEN: ${{ secrets.JAYDEN_BOT_TOKEN }}
       - name: Save daily pack count (if changed)
+        if: always()          # run this even if main.py had a hiccup, so we never lose the real pipeline result over this
+        continue-on-error: true   # a git race here should NEVER mark the whole run as failed
         run: |
-          if [ -n "$(git status --porcelain state/)" ]; then
+          if [ -n "$(git status --porcelain state/ 2>/dev/null)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
             git add state/
-            git commit -m "Update daily pack count [skip ci]"
-            git push
+            git commit -m "Update daily pack count [skip ci]" || echo "Nothing to commit, skipping."
+            git pull --rebase origin main || true
+            git push || echo "Push failed (likely a race with another run) - non-fatal, continuing."
           else
             echo "No state changes to commit."
           fi
