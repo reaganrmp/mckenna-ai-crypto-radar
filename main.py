@@ -105,13 +105,27 @@ def load_daily_count():
         return 0
 
 
-def save_daily_count(count):
+def load_seen_keys():
+    """Story keys (url or title) already alerted/packed today - prevents the
+    same story getting sent twice if it reappears in the feed on a later run."""
+    try:
+        with open(STATE_FILE) as f:
+            data = json.load(f)
+        if data.get("date") != _today_str():
+            return set()
+        return set(data.get("seen", []))
+    except Exception:
+        return set()
+
+
+def save_daily_state(count, seen_keys):
     try:
         os.makedirs(os.path.dirname(STATE_FILE), exist_ok=True)
         with open(STATE_FILE, "w") as f:
-            json.dump({"date": _today_str(), "count": count}, f)
+            json.dump({"date": _today_str(), "count": count,
+                      "seen": list(seen_keys)[-200:]}, f)  # cap list size, oldest drop off
     except Exception as e:
-        log(f"Could not save daily count: {e}")
+        log(f"Could not save daily state: {e}")
 
 
 
@@ -409,19 +423,6 @@ News:
         return json.loads(text2)  # let it raise clearly if the retry also fails
 
 
-# Posting-time guidance (Jakarta/WIB) - static reference, backed by 2026 platform
-# data, shown with every pack so it's always in front of you.
-POSTING_GUIDE = (
-    "📅 <b>Best times to post (WIB):</b>\n"
-    "  <b>TikTok:</b> 12–2 PM (lunch) or 7–10 PM · best days Wed/Fri/Sun\n"
-    "  <b>Instagram:</b> ~9 AM or 7–9 PM · best day Wednesday\n"
-    "  <b>Threads:</b> 9 AM–12 PM · best day Wednesday\n"
-    "  <b>X:</b> 12–6 PM · best days Tue–Thu\n\n"
-    "📊 <b>Suggested frequency:</b> 3-5 posts/day across platforms while building "
-    "the account, prioritizing consistency over volume - quality high-priority "
-    "stories only, not filler."
-)
-
 
 def format_pack(p, news_title="", item=None):
     esc = html.escape
@@ -604,10 +605,12 @@ def main():
     log(f"{len(results)} are HIGH priority - only these get sent.")
 
     daily_count = load_daily_count()
+    seen_keys = load_seen_keys()
     log(f"Packs generated so far today: {daily_count}/{DAILY_PACK_LIMIT}")
 
     sent = 0
     packs_made = 0
+    new_seen = set()
     for a in results:
         n = a.get("n")
         if not isinstance(n, int) or n < 1 or n > len(items):
@@ -615,8 +618,14 @@ def main():
         item = dict(items[n - 1])
         item["markets"] = a.get("markets", [])
 
+        key = item.get("url") or item["title"]
+        if key in seen_keys:
+            log(f"Already alerted earlier today, skipping duplicate: {item['title'][:60]}")
+            continue
+
         if send_telegram(format_message(item, a)):
             sent += 1
+            new_seen.add(key)
             time.sleep(1)
 
         if packs_made >= MAX_PACKS_PER_RUN:
@@ -630,10 +639,8 @@ def main():
                 packs_made += 1
                 time.sleep(1)
 
-    if packs_made > 0:
-        save_daily_count(daily_count + packs_made)
-        if JAYDEN_BOT_TOKEN:
-            send_telegram(POSTING_GUIDE, token=JAYDEN_BOT_TOKEN)
+    if new_seen or packs_made > 0:
+        save_daily_state(daily_count + packs_made, seen_keys | new_seen)
 
     log(f"Sent {sent} alert(s), generated {packs_made} pack(s). Done.")
 
