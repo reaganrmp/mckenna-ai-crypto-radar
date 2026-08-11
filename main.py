@@ -37,10 +37,10 @@ except Exception:
 LOOKBACK_MINUTES = 20          # treat news from the last N minutes as "new"
 MAX_ITEMS_PER_RUN = 20         # safety cap so a news burst can't spike your bill
 MAX_PACKS_PER_RUN = 2          # cap on Jayden packs (Sonnet calls) per run
-DAILY_PACK_LIMIT = 5           # hard cap on auto-generated packs per day (manual regen: not capped)
+DAILY_PACK_LIMIT = 3           # hard cap on auto-generated packs per day (manual regen: not capped)
 STATE_FILE = "state/daily_count.json"  # tiny file committed back to the repo to remember count across runs
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"     # McKenna's cheap news filter
-JAYDEN_MODEL = "claude-sonnet-5"               # better copywriting for packs
+JAYDEN_MODEL = "claude-haiku-4-5-20251001"     # switched from Sonnet to cut cost - see note below
 
 RSS_FEEDS = [
     "https://cointelegraph.com/rss",
@@ -375,7 +375,10 @@ Return ONLY JSON (no markdown, no extra text):
  "visual_type": "real_photo" | "ai_illustrative" | "ai_generated",
  "master_news": "for the NEWS template field",
  "master_optional": "for the OPTIONAL template field, per rules above",
- "top_hashtags": ["5-6 hashtags total, works across all platforms"],
+ "top_hashtags": ["exactly 5 hashtags, optimized specifically for Instagram reach -
+   mix broad discovery tags (e.g. #crypto #bitcoin) with 1-2 more specific/niche
+   ones tied to this story - avoid generic overused tags with no real targeting
+   value, avoid anything that reads as spammy or shadowban-prone"],
  "proof_slide": "ONLY if there's a genuine receipt worth a 2nd slide - a stat,
    a quote, or a note like 'screenshot the chart/tweet from the source link'.
    Leave as empty string for most stories - a single slide is usually enough."
@@ -446,6 +449,8 @@ def format_pack(p, news_title="", item=None):
     proof = p.get("proof_slide", "").strip()
     proof_block = f"📄 <b>Slide 2 idea:</b> {esc(proof)}\n\n" if proof else ""
 
+    caption_with_tags = f"{p.get('caption', '')}\n\n{tags}"
+
     return (
         f"✍️ <b>JAYDEN CONTENT PACK</b>\n"
         f"📰 <b>News:</b> {esc(news_title)}\n\n"
@@ -453,8 +458,8 @@ def format_pack(p, news_title="", item=None):
         f"✨ <b>Highlight:</b> {esc(p.get('highlight', ''))}\n\n"
         f"{template_block}\n\n"
         f"{proof_block}"
-        f"📝 <b>Caption:</b>\n{esc(p.get('caption', ''))}\n\n"
-        f"#️⃣ <b>Hashtags:</b> {esc(tags)}\n\n"
+        f"📝 <b>Caption + hashtags (tap to copy):</b>\n"
+        f"<code>{esc(caption_with_tags)}</code>\n\n"
         f"🔗 <b>Source:</b> {source_line}"
     )
 
