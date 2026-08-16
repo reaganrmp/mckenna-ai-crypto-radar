@@ -34,6 +34,10 @@ except Exception:
     pass
 
 # ------------------------- CONFIG (safe to tweak later) -------------------------
+MCKENNA_ENABLED = False        # set True to re-enable automatic news scanning/alerts.
+                                # When False: McKenna's scan is fully skipped (saves
+                                # Haiku + Sonnet costs) but "regen:" still works normally -
+                                # message McKenna's bot with "regen: <headline>" anytime.
 LOOKBACK_MINUTES = 20          # treat news from the last N minutes as "new"
 MAX_ITEMS_PER_RUN = 20         # safety cap so a news burst can't spike your bill
 MAX_PACKS_PER_RUN = 2          # cap on Jayden packs (Sonnet calls) per run
@@ -586,8 +590,13 @@ def main():
         log("Missing required secrets: " + ", ".join(missing))
         sys.exit(1)
 
-    # 1) Handle any manual "regen:" requests first
+    # 1) Handle any manual "regen:" requests first - always runs, even with
+    #    McKenna paused, so you can still get packs on demand.
     handle_regen_commands()
+
+    if not MCKENNA_ENABLED:
+        log("McKenna is paused (MCKENNA_ENABLED = False) - skipping automatic news scan.")
+        return
 
     # 2) Normal automatic news scan
     log("Fetching AI + crypto + regulation news...")
